@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KeytoCoin – Browser-Only Blockchain</title>
+
+<style>
+body{background:#111;color:#0f0;font-family:monospace;padding:20px;overflow-x:hidden}
+button,input{padding:6px 10px;background:#222;color:#0f0;border:1px solid #0f0;border-radius:6px;margin:2px}
+input{width:250px}
+#log{max-height:200px;overflow-y:auto;background:#222;padding:10px;border:1px solid #0f0}
+
+.brick-text{
+font-size:30px;font-weight:bold;
+background:linear-gradient(90deg,#ff0000,#ff6600,#ffcc00);
+background-size:200% auto;
+-webkit-background-clip:text;
+-webkit-text-fill-color:transparent;
+animation:brickmove 3s linear infinite;
+}
+@keyframes brickmove{
+0%{background-position:0% center}
+100%{background-position:200% center}
+}
+</style>
+</head>
+
+<body>
+
+<h2>🪙 KEYTOCOIN 🪙</h2>
+
+<button onclick="createWallet()">Create Wallet</button>
+<button onclick="startMining()">Start Mining</button>
+<button onclick="stopMining()">Stop Mining</button>
+<button onclick="togglePriv()">Show / Hide Private</button>
+
+<br><br>
+<input id="importPriv" placeholder="Import Private Key">
+<button onclick="importWallet()">Import Wallet</button>
+
+<p>Address: <span id="address"></span></p>
+<p>Private: <span id="privkey" style="user-select:none"></span></p>
+<p>Balance: <span id="balance">0</span> KTC</p>
+
+<hr>
+<h3>Mining</h3>
+<p>Mined Blocks: <span id="blocks">0</span></p>
+<p>Total Supply: <span id="supply">0</span> / 17,000,000</p>
+
+<hr>
+<h3>Transfer</h3>
+<input id="to" placeholder="Recipient Address">
+<input id="amount" type="number" placeholder="Amount">
+<button onclick="transfer()">Transfer</button>
+
+<hr>
+<pre id="log"></pre>
+
+<div align="center">
+<span class="brick-text">⛓⛏KEYTOCOIN⛏⛓</span>
+</div>
+
+<script>
+/******** CONFIG ********/
+const MAX_SUPPLY = 17_000_000;
+const TARGET_BLOCK_TIME = 5000;
+
+/******** STATE ********/
+let blockchain = JSON.parse(localStorage.getItem('ktc_chain') || '[]');
+let wallets = JSON.parse(localStorage.getItem('ktc_wallets') || '{}');
+let totalSupply = parseInt(localStorage.getItem('ktc_supply') || '0');
+
+let privKey = null;
+let address = null;
+let showPriv = false;
+let mining = false;
+let minerInterval = null;
+let lastMine = 0;
+let lastActivity = Date.now();
+
+/******** UTILS ********/
+function save(){
+localStorage.setItem('ktc_chain',JSON.stringify(blockchain));
+localStorage.setItem('ktc_wallets',JSON.stringify(wallets));
+localStorage.setItem('ktc_supply',totalSupply);
+}
+
+function log(msg){
+const el=document.getElementById('log');
+el.textContent=msg+"\n"+el.textContent;
+}
+
+async function sha256(data){
+const enc=new TextEncoder().encode(data);
+const hash=await crypto.subtle.digest("SHA-256",enc);
+return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/******** SECURITY ********/
+async function validateChain(){
+for(let i=1;i<blockchain.length;i++){
+const prev=blockchain[i-1];
+const cur=blockchain[i];
+if(cur.p!==prev.h) return false;
+const copy={...cur}; delete copy.h;
+const h=await sha256(JSON.stringify(copy));
+if(h!==cur.h) return false;
+}
+return true;
+}
+
+["click","keydown"].forEach(e=>{
+document.addEventListener(e,()=>lastActivity=Date.now());
+});
+
+setInterval(()=>{
+if(privKey && Date.now()-lastActivity>5*60*1000){
+privKey=null;address=null;showPriv=false;
+updateUI();log("🔒 Wallet auto-locked (idle)");
+}
+},30000);
+
+/******** BLOCKCHAIN ********/
+async function genesis(){
+if(blockchain.length) return;
+const g={i:0,t:Date.now(),tx:[],p:"0",n:0};
+g.h=await sha256(JSON.stringify(g));
+blockchain.push(g);
+save();
+}
+
+function difficulty(){
+return Math.max(3,Math.floor(blockchain.length/1000)+3);
+}
+
+async function mine(){
+if(mining||!address) return;
+if(Date.now()-lastMine<TARGET_BLOCK_TIME-500) return;
+if(totalSupply>=MAX_SUPPLY) return log("⛔ Max supply reached");
+lastMine=Date.now();
+mining=true;
+try{
+const diff=difficulty();
+const prev=blockchain.at(-1).h;
+let nonce=0,hash,block;
+do{
+block={i:blockchain.length,t:Date.now(),tx:[{f:"system",to:address,a:1}],p:prev,n:nonce};
+hash=await sha256(JSON.stringify(block));
+nonce++;
+}while(!hash.startsWith("0".repeat(diff)));
+block.h=hash;
+blockchain.push(block);
+wallets[address]=(wallets[address]||0)+1;
+totalSupply++;
+save();updateUI();
+log("⛏️ Block mined KTC ");
+}finally{mining=false;}
+}
+
+/******** WALLET ********/
+async function createWallet(){
+const r=new Uint8Array(32);
+crypto.getRandomValues(r);
+privKey=[...r].map(b=>b.toString(16).padStart(2,"0")).join("");
+address=(await sha256(privKey)).slice(0,40);
+wallets[address]=wallets[address]||0;
+updateUI();
+}
+
+async function importWallet(){
+const pk=document.getElementById("importPriv").value.trim();
+if(pk.length!==64) return log("❌ Invalid private key");
+privKey=pk;
+address=(await sha256(pk)).slice(0,40);
+wallets[address]=wallets[address]||0;
+updateUI();
+}
+
+/******** TRANSFER ********/
+async function transfer(){
+if(!privKey) return log("⚠️ Wallet not loaded");
+const to=document.getElementById("to").value.trim();
+const amt=parseInt(document.getElementById("amount").value);
+if(!/^[a-f0-9]{40}$/.test(to)) return log("❌ Invalid address");
+if(!Number.isInteger(amt)||amt<=0) return;
+if(wallets[address]<amt) return log("❌ Balance insufficient");
+
+const sig=await sha256(privKey+to+amt);
+wallets[address]-=amt;
+wallets[to]=(wallets[to]||0)+amt;
+
+const block={i:blockchain.length,t:Date.now(),tx:[{f:address,to,a:amt,s:sig}],p:blockchain.at(-1).h,n:0};
+block.h=await sha256(JSON.stringify(block));
+blockchain.push(block);
+save();updateUI();
+log("🔁 Transfer confirmed");
+}
+
+/******** UI ********/
+function updateUI(){
+document.getElementById("address").textContent=address||"";
+document.getElementById("balance").textContent=wallets[address]||0;
+document.getElementById("supply").textContent=totalSupply;
+document.getElementById("blocks").textContent=blockchain.length-1;
+document.getElementById("privkey").textContent=
+privKey?(showPriv?privKey:privKey.slice(0,12)+"..."):"";
+}
+
+function togglePriv(){showPriv=!showPriv;updateUI()}
+function startMining(){if(!minerInterval) minerInterval=setInterval(mine,TARGET_BLOCK_TIME)}
+function stopMining(){clearInterval(minerInterval);minerInterval=null}
+
+/******** INIT ********/
+(async()=>{
+await genesis();
+const ok=await validateChain();
+if(!ok){
+alert("⚠️ Blockchain corrupted – reset");
+localStorage.clear();
+blockchain=[];wallets={};totalSupply=0;
+await genesis();
+}
+updateUI();
+log("🌱 Genesis block loaded securely");
+})();
+</script>
+</body>
+</html>

@@ -2,39 +2,303 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>KTC Explorer – Global P2P Mainnet</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KeytoCoin Wallet</title>
+
 <style>
-body{background:#0b0b0b;color:#00ff99;font-family:monospace;padding:15px}
-h1,h2{color:#00ffaa}
-.card{border:1px solid #00ff99;border-radius:10px;padding:10px;margin-bottom:10px}
-small{color:#77ffcc}
-button{background:#111;color:#00ff99;border:1px solid #00ff99;padding:5px 10px;border-radius:6px}
-pre{white-space:pre-wrap;word-break:break-all}
-.block{margin-bottom:6px}
+body{
+background:#111;
+color:#0f0;
+font-family:monospace;
+padding:20px;
+overflow-x:hidden;
+}
+
+button,input{
+padding:6px 10px;
+background:#222;
+color:#0f0;
+border:1px solid #0f0;
+border-radius:6px;
+margin:2px;
+}
+
+input{ width:250px; }
+
+#log{
+max-height:200px;
+overflow-y:auto;
+background:#222;
+padding:10px;
+border:1px solid #0f0;
+}
+
+/* COIN RAIN */
+.coin{
+position:fixed;
+top:-60px;
+width:50px;
+height:50px;
+border-radius:50%;
+background:radial-gradient(circle at 30% 30%,#ffd700,#c99700);
+box-shadow:0 0 10px #ff0,inset 0 0 10px #c90;
+display:flex;
+align-items:center;
+justify-content:center;
+font-weight:bold;
+color:#111;
+font-size:14px;
+animation:fall linear forwards;
+z-index:-1;
+}
+@keyframes fall{
+to{ transform:translateY(110vh) rotate(360deg); opacity:0.85; }
+}
+
+/* BRICK TEXT */
+.brick-text{
+font-size:30px;
+font-weight:bold;
+display:inline-block;
+background:linear-gradient(90deg,#ff0000,#ff6600,#ffcc00);
+background-size:200% auto;
+-webkit-background-clip:text;
+-webkit-text-fill-color:transparent;
+animation:brickmove 3s linear infinite;
+}
+@keyframes brickmove{
+0%{background-position:0% center;}
+100%{background-position:200% center;}
+}
 </style>
 </head>
+
 <body>
 
-<h1>🔎 KeytoCoin (KTC) Explorer</h1>
-<small>Public Read-Only • Auto P2P • Browser-Only</small>
+<h2>   🪙KEYTOCOIN🪙</h2>
 
-<div class="card">
-<h2>📊 Network</h2>
-<div>Height: <b id="height">0</b></div>
-<div>Supply: <b id="supply">0</b> KTC</div>
-<div>Peers: <b id="peers">0</b></div>
-</div>
+<button id="createWalletBtn">Create Wallet</button>
+<button id="importWalletBtn">Import Wallet</button>
+<button id="startMiningBtn">Start Mining</button>
+<button id="stopMiningBtn">Stop Mining</button>
+<button id="saveAddressBtn">Save Address</button>
+<button id="togglePrivBtn">Show / Hide Private Key</button>
 
-<div class="card">
-<h2>⛓️ Latest Blocks</h2>
-<div id="blocks"></div>
-</div>
+<p>Address: <span id="address"></span></p>
+<p>Private: <span id="privkey"></span></p>
+<p>Balance: <span id="balance">0</span> KTC</p>
+<p>USDT Balance: <span id="usdtBalance">0.00</span></p>
 
-<div class="card">
-<h2>📦 Block Detail</h2>
-<pre id="detail">select block</pre>
-</div>
+<hr>
+
+<h3>Mining</h3>
+<p>Mined Blocks: <span id="blocks">0</span></p>
+<p>Total Supply: <span id="supply">0</span> / 17,000,000 KTC</p>
+
+<hr>
+
+<h3>Send Transaction</h3>
+<input id="to" placeholder="Recipient Address">
+<input id="amount" type="number" placeholder="Amount">
+<button id="sendBtn">Send</button>
+
+<hr>
+
+<h3>Swap KTC → USDT</h3>
+<input id="swapAmount" type="number" placeholder="Amount of KTC">
+<button id="swapBtn">Swap</button>
+<p id="swapResult"></p>
+
+<hr>
+
+<h3>Saved Wallets</h3>
+<ul id="savedWallets"></ul>
+
+<hr>
+
+<h3>Blockchain Log</h3>
+<pre id="log"></pre>
+
+<div align="center"><span class="brick-text">⛓⛏KEYTOCOIN⛏⛓</span></div>
+<div align="center"><span class="brick-text">⛓⛏BLOCKCHAIN⛏⛓</span></div>
+
+<script>
+const API = "http://localhost:8883";
+
+/* DOM */
+const addressEl = document.getElementById("address");
+const privkeyEl = document.getElementById("privkey");
+const balanceEl = document.getElementById("balance");
+const blocksEl = document.getElementById("blocks");
+const supplyEl = document.getElementById("supply");
+const usdtBalanceEl = document.getElementById("usdtBalance");
+const toInput = document.getElementById("to");
+const amountInput = document.getElementById("amount");
+const swapAmount = document.getElementById("swapAmount");
+const swapResult = document.getElementById("swapResult");
+const savedWallets = document.getElementById("savedWallets");
+
+/* STATE */
+let privKey=null, address=null, miningInterval=null;
+let usdtBalance = Number(localStorage.getItem("KTC_USDT")||0);
+let showPriv=false;
+
+/* LOG */
+function log(msg){
+const d=document.createElement("div");
+d.textContent=msg;
+logEl.prepend(d);
+}
+const logEl=document.getElementById("log");
+
+/* HASH */
+async function hash(data){
+const buf=new TextEncoder().encode(data);
+const dig=await crypto.subtle.digest("SHA-256",buf);
+return Array.from(new Uint8Array(dig)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/* WALLET */
+async function createWallet(){
+const a=new Uint8Array(32);
+crypto.getRandomValues(a);
+privKey=[...a].map(b=>b.toString(16).padStart(2,"0")).join("");
+address=(await hash(privKey)).slice(0,32);
+localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
+log("✅ Wallet created");
+updateDisplay();
+}
+
+async function importWallet(){
+const pk=prompt("Paste Private Key:");
+if(!pk) return;
+privKey=pk;
+address=(await hash(pk)).slice(0,32);
+localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
+log("📥 Wallet imported");
+updateDisplay();
+}
+
+/* INFO */
+async function getWalletInfo(){
+if(!address) return {balance:0,blocks:0,supply:0};
+try{
+return await (await fetch(`${API}/wallet/${address}`)).json();
+}catch{
+return {balance:0,blocks:0,supply:0};
+}
+}
+
+/* DISPLAY */
+async function updateDisplay(){
+addressEl.textContent=address||"";
+privkeyEl.textContent=privKey?(showPriv?privKey:privKey.slice(0,16)+"..."):"";
+const i=await getWalletInfo();
+balanceEl.textContent=i.balance;
+blocksEl.textContent=i.blocks;
+supplyEl.textContent=i.supply;
+usdtBalanceEl.textContent=usdtBalance.toFixed(2);
+}
+
+/* MINING */
+async function mineBlock(){
+if(!address) return log("⚠️ Create wallet first");
+const r=await fetch(`${API}/mine`,{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({address})
+});
+const d=await r.json();
+log(d.error?("⚠️ "+d.error):("⛏️ KTC "+d.message));
+updateDisplay();
+}
+
+function startMining(){
+if(!miningInterval){
+miningInterval=setInterval(mineBlock,5000);
+log("⚙️ Mining started");
+}
+}
+function stopMining(){
+clearInterval(miningInterval);
+miningInterval=null;
+}
+
+/* TX */
+async function sendTransaction(){
+const to=toInput.value;
+const amount=parseInt(amountInput.value);
+if(!to||amount<=0) return;
+const r=await fetch(`${API}/send`,{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({from:address,to,amount})
+});
+const d=await r.json();
+log(d.error?("⚠️ "+d.error):("➕ "+d.message));
+updateDisplay();
+}
+
+/* SWAP */
+function swapKTC(){
+const amt=parseInt(swapAmount.value);
+if(amt<=0) return;
+const rate=0.65;
+const usdt=amt*rate;
+usdtBalance+=usdt;
+localStorage.setItem("KTC_USDT",usdtBalance);
+swapResult.textContent=`✅ ${amt} KTC → ${usdt.toFixed(2)} USDT`;
+log(`🔄 Swap ${amt} KTC → ${usdt.toFixed(2)} USDT`);
+updateDisplay();
+}
+
+/* SAVE */
+function saveWalletAddress(){
+if(!address) return;
+let s=JSON.parse(localStorage.getItem("KTC_Saved")||"[]");
+if(!s.includes(address)){
+s.push(address);
+localStorage.setItem("KTC_Saved",JSON.stringify(s));
+}
+renderSavedWallets();
+}
+
+function renderSavedWallets(){
+savedWallets.innerHTML="";
+(JSON.parse(localStorage.getItem("KTC_Saved")||"[]")).forEach(a=>{
+const li=document.createElement("li");
+li.textContent=a;
+savedWallets.appendChild(li);
+});
+}
+
+/* COIN RAIN LOOP */
+function createCoin(){
+const c=document.createElement("div");
+c.className="coin";
+c.textContent="KTC";
+c.style.left=Math.random()*innerWidth+"px";
+c.style.animationDuration=(3+Math.random()*2)+"s";
+document.body.appendChild(c);
+setTimeout(()=>c.remove(),6000);
+}
+setInterval(createCoin,700);
+
+/* INIT */
+window.onload=()=>{
+createWalletBtn.onclick=createWallet;
+importWalletBtn.onclick=importWallet;
+startMiningBtn.onclick=startMining;
+stopMiningBtn.onclick=stopMining;
+sendBtn.onclick=sendTransaction;
+swapBtn.onclick=swapKTC;
+saveAddressBtn.onclick=saveWalletAddress;
+togglePrivBtn.onclick=()=>{showPriv=!showPriv;updateDisplay();};
+renderSavedWallets();
+updateDisplay();
+};
+</script>
+</body>
+</html>
 
 <script>
 /* ================= CORE ================= */

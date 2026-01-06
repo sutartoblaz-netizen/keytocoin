@@ -1,43 +1,37 @@
-// ================= KEYTOCOIN SERVER (FINAL SYNC) =================
 const express = require("express");
 const cors = require("cors");
+const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "20kb" }));
+app.use(express.json());
 
 // ================= CONFIG =================
 const PORT = 8882;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 1;
 const MINING_KEY = "EQB1FrLRrNYXPdgidVkVUPG2G-dUi36SyNGnoYQGzc6fZ165";
-const MINING_DELAY = 4000;
 
-// ================= STATE (IN-MEMORY) =================
-const wallets = {}; // address => { balance, blocks }
+// ================= STATE =================
 let totalSupply = 0;
-const lastMine = {};
+let wallets = {}; 
+// wallets[address] = { balance, blocks }
 
 // ================= UTILS =================
-function validAddress(addr) {
-  return typeof addr === "string" && /^[a-f0-9]{32}$/.test(addr);
+function hash(data){
+  return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-function getWallet(addr) {
-  if (!wallets[addr]) {
-    wallets[addr] = { balance: 0, blocks: 0 };
+function getWallet(address){
+  if(!wallets[address]){
+    wallets[address] = { balance: 0, blocks: 0 };
   }
-  return wallets[addr];
+  return wallets[address];
 }
 
 // ================= WALLET INFO =================
-app.get("/wallet/:address", (req, res) => {
-  const { address } = req.params;
-  if (!validAddress(address)) {
-    return res.json({ balance: 0, blocks: 0, supply: totalSupply });
-  }
-
-  const w = getWallet(address);
+app.get("/wallet/:address",(req,res)=>{
+  const w = getWallet(req.params.address);
   res.json({
     balance: w.balance,
     blocks: w.blocks,
@@ -46,63 +40,63 @@ app.get("/wallet/:address", (req, res) => {
 });
 
 // ================= MINING =================
-app.post("/mine", (req, res) => {
+app.post("/mine",(req,res)=>{
   const { address, miningKey } = req.body;
 
-  if (miningKey !== MINING_KEY) {
-    return res.status(403).json({ error: "Invalid mining key" });
+  if(miningKey !== MINING_KEY){
+    return res.json({ error: "Invalid mining key" });
   }
 
-  if (!validAddress(address)) {
-    return res.status(400).json({ error: "Invalid address" });
+  if(totalSupply >= MAX_SUPPLY){
+    return res.json({ error: "Max supply reached" });
   }
-
-  if (totalSupply >= MAX_SUPPLY) {
-    return res.status(403).json({ error: "Max supply reached" });
-  }
-
-  const now = Date.now();
-  if (lastMine[address] && now - lastMine[address] < MINING_DELAY) {
-    return res.status(429).json({ error: "Mining too fast" });
-  }
-
-  lastMine[address] = now;
 
   const w = getWallet(address);
   w.balance += BLOCK_REWARD;
   w.blocks += 1;
   totalSupply += BLOCK_REWARD;
 
-  res.json({ message: "Block mined successfully" });
+  res.json({
+    message: `Block mined +${BLOCK_REWARD} KTC`,
+    supply: totalSupply
+  });
 });
 
 // ================= SEND TX =================
-app.post("/send", (req, res) => {
+app.post("/send",(req,res)=>{
   const { from, to, amount } = req.body;
 
-  if (
-    !validAddress(from) ||
-    !validAddress(to) ||
-    typeof amount !== "number" ||
-    amount <= 0
-  ) {
-    return res.status(400).json({ error: "Invalid transaction data" });
+  if(!from || !to || amount <= 0){
+    return res.json({ error: "Invalid transaction" });
   }
 
   const sender = getWallet(from);
   const receiver = getWallet(to);
 
-  if (sender.balance < amount) {
-    return res.status(400).json({ error: "Insufficient balance" });
+  if(sender.balance < amount){
+    return res.json({ error: "Insufficient balance" });
   }
 
   sender.balance -= amount;
   receiver.balance += amount;
 
-  res.json({ message: "Transaction successful" });
+  res.json({
+    message: `Sent ${amount} KTC to ${to.slice(0,8)}...`
+  });
+});
+
+// ================= EXPLORER =================
+app.get("/explorer/addresses",(req,res)=>{
+  const list = Object.entries(wallets).map(([address,w])=>({
+    address,
+    balance: w.balance,
+    blocks: w.blocks
+  }));
+
+  res.json({ wallets: list });
 });
 
 // ================= START =================
-app.listen(PORT, () => {
-  console.log(`🪙 KeytoCoin Server running on http://localhost:${PORT}`);
+app.listen(PORT,()=>{
+  console.log("⛓️ KeytoCoin MAINNET running on port",PORT);
 });

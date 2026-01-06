@@ -139,7 +139,7 @@ app.post("/mine", (req, res) => {
 
   broadcast({ type: "mine", block, supply: totalSupply });
 
-  res.json({ message: "BlOCK KEYTOCOIN" });
+  res.json({ message: "MINED KEYTOCOIN" });
 });
 
 /* ================= START ================= */

@@ -80,7 +80,6 @@ animation:brickmove 3s linear infinite;
 <button id="importWalletBtn">Import Wallet</button>
 <button id="startMiningBtn">Start Mining</button>
 <button id="stopMiningBtn">Stop Mining</button>
-<button id="saveAddressBtn">Save Address</button>
 <button id="togglePrivBtn">Show / Hide Private Key</button>
 
 <p>Address: <span id="address"></span></p>
@@ -110,11 +109,6 @@ animation:brickmove 3s linear infinite;
 
 <hr>
 
-<h3>Saved Wallets</h3>
-<ul id="savedWallets"></ul>
-
-<hr>
-
 <h3>Blockchain Log</h3>
 <pre id="log"></pre>
 
@@ -123,6 +117,7 @@ animation:brickmove 3s linear infinite;
 
 <script>
 const API = "http://localhost:8882";
+const MINING_KEY = "EQB1FrLRrNYXPdgidVkVUPG2G-dUi36SyNGnoYQGzc6fZ165";
 
 /* DOM */
 const addressEl = document.getElementById("address");
@@ -135,7 +130,7 @@ const toInput = document.getElementById("to");
 const amountInput = document.getElementById("amount");
 const swapAmount = document.getElementById("swapAmount");
 const swapResult = document.getElementById("swapResult");
-const savedWallets = document.getElementById("savedWallets");
+const logEl = document.getElementById("log");
 
 /* STATE */
 let privKey=null, address=null, miningInterval=null;
@@ -144,157 +139,126 @@ let showPriv=false;
 
 /* LOG */
 function log(msg){
-const d=document.createElement("div");
-d.textContent=msg;
-logEl.prepend(d);
+  const d=document.createElement("div");
+  d.textContent=msg;
+  logEl.prepend(d);
 }
-const logEl=document.getElementById("log");
 
 /* HASH */
 async function hash(data){
-const buf=new TextEncoder().encode(data);
-const dig=await crypto.subtle.digest("SHA-256",buf);
-return Array.from(new Uint8Array(dig)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  const buf=new TextEncoder().encode(data);
+  const dig=await crypto.subtle.digest("SHA-256",buf);
+  return Array.from(new Uint8Array(dig)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
 /* WALLET */
 async function createWallet(){
-const a=new Uint8Array(32);
-crypto.getRandomValues(a);
-privKey=[...a].map(b=>b.toString(16).padStart(2,"0")).join("");
-address=(await hash(privKey)).slice(0,32);
-localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
-log("✅ Wallet created");
-updateDisplay();
+  const a=new Uint8Array(32);
+  crypto.getRandomValues(a);
+  privKey=[...a].map(b=>b.toString(16).padStart(2,"0")).join("");
+  address=(await hash(privKey)).slice(0,32);
+  localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
+  log("✅ Wallet created");
+  updateDisplay();
 }
 
 async function importWallet(){
-const pk=prompt("Paste Private Key:");
-if(!pk) return;
-privKey=pk;
-address=(await hash(pk)).slice(0,32);
-localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
-log("📥 Wallet imported");
-updateDisplay();
+  const pk=prompt("Paste Private Key:");
+  if(!pk) return;
+  privKey=pk;
+  address=(await hash(pk)).slice(0,32);
+  localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));
+  log("📥 Wallet imported");
+  updateDisplay();
 }
 
 /* INFO */
 async function getWalletInfo(){
-if(!address) return {balance:0,blocks:0,supply:0};
-try{
-return await (await fetch(`${API}/wallet/${address}`)).json();
-}catch{
-return {balance:0,blocks:0,supply:0};
-}
+  if(!address) return {balance:0,blocks:0,supply:0};
+  try{
+    return await (await fetch(`${API}/wallet/${address}`)).json();
+  }catch{
+    return {balance:0,blocks:0,supply:0};
+  }
 }
 
 /* DISPLAY */
 async function updateDisplay(){
-addressEl.textContent=address||"";
-privkeyEl.textContent=privKey?(showPriv?privKey:privKey.slice(0,16)+"..."):"";
-const i=await getWalletInfo();
-balanceEl.textContent=i.balance;
-blocksEl.textContent=i.blocks;
-supplyEl.textContent=i.supply;
-usdtBalanceEl.textContent=usdtBalance.toFixed(2);
+  addressEl.textContent=address||"";
+  privkeyEl.textContent=privKey?(showPriv?privKey:privKey.slice(0,16)+"..."):"";
+  const i=await getWalletInfo();
+  balanceEl.textContent=i.balance;
+  blocksEl.textContent=i.blocks;
+  supplyEl.textContent=i.supply;
+  usdtBalanceEl.textContent=usdtBalance.toFixed(2);
 }
 
 /* MINING */
 async function mineBlock(){
-if(!address) return log("⚠️ Create wallet first");
-const r=await fetch(`${API}/mine`,{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({address})
-});
-const d=await r.json();
-log(d.error?("⚠️ "+d.error):("⛏️ KTC "+d.message));
-updateDisplay();
+  if(!address) return log("⚠️ Create wallet first");
+
+  const r=await fetch(`${API}/mine`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ address, miningKey: MINING_KEY })
+  });
+
+  const d=await r.json();
+  log(d.error ? "⛔ "+d.error : "⛏️ "+d.message);
+  updateDisplay();
 }
 
 function startMining(){
-if(!miningInterval){
-miningInterval=setInterval(mineBlock,5000);
-log("⚙️ Mining started");
-}
+  if(!miningInterval){
+    miningInterval=setInterval(mineBlock,5000);
+    log("⚙️ Mining started");
+  }
 }
 function stopMining(){
-clearInterval(miningInterval);
-miningInterval=null;
+  clearInterval(miningInterval);
+  miningInterval=null;
 }
 
 /* TX */
 async function sendTransaction(){
-const to=toInput.value;
-const amount=parseInt(amountInput.value);
-if(!to||amount<=0) return;
-const r=await fetch(`${API}/send`,{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({from:address,to,amount})
-});
-const d=await r.json();
-log(d.error?("⚠️ "+d.error):("➕ "+d.message));
-updateDisplay();
+  const to=toInput.value;
+  const amount=parseInt(amountInput.value);
+  if(!to||amount<=0) return;
+
+  const r=await fetch(`${API}/send`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({from:address,to,amount})
+  });
+
+  const d=await r.json();
+  log(d.error?("⚠️ "+d.error):("➕ "+d.message));
+  updateDisplay();
 }
 
 /* SWAP */
 function swapKTC(){
-const amt=parseInt(swapAmount.value);
-if(amt<=0) return;
-const rate=0.65;
-const usdt=amt*rate;
-usdtBalance+=usdt;
-localStorage.setItem("KTC_USDT",usdtBalance);
-swapResult.textContent=`✅ ${amt} KTC → ${usdt.toFixed(2)} USDT`;
-log(`🔄 Swap ${amt} KTC → ${usdt.toFixed(2)} USDT`);
-updateDisplay();
+  const amt=parseInt(swapAmount.value);
+  if(amt<=0) return;
+  const rate=0.65;
+  const usdt=amt*rate;
+  usdtBalance+=usdt;
+  localStorage.setItem("KTC_USDT",usdtBalance);
+  swapResult.textContent=`✅ ${amt} KTC → ${usdt.toFixed(2)} USDT`;
+  log(`🔄 Swap ${amt} KTC → ${usdt.toFixed(2)} USDT`);
+  updateDisplay();
 }
-
-/* SAVE */
-function saveWalletAddress(){
-if(!address) return;
-let s=JSON.parse(localStorage.getItem("KTC_Saved")||"[]");
-if(!s.includes(address)){
-s.push(address);
-localStorage.setItem("KTC_Saved",JSON.stringify(s));
-}
-renderSavedWallets();
-}
-
-function renderSavedWallets(){
-savedWallets.innerHTML="";
-(JSON.parse(localStorage.getItem("KTC_Saved")||"[]")).forEach(a=>{
-const li=document.createElement("li");
-li.textContent=a;
-savedWallets.appendChild(li);
-});
-}
-
-/* COIN RAIN LOOP */
-function createCoin(){
-const c=document.createElement("div");
-c.className="coin";
-c.textContent="KTC";
-c.style.left=Math.random()*innerWidth+"px";
-c.style.animationDuration=(3+Math.random()*2)+"s";
-document.body.appendChild(c);
-setTimeout(()=>c.remove(),6000);
-}
-setInterval(createCoin,700);
 
 /* INIT */
 window.onload=()=>{
-createWalletBtn.onclick=createWallet;
-importWalletBtn.onclick=importWallet;
-startMiningBtn.onclick=startMining;
-stopMiningBtn.onclick=stopMining;
-sendBtn.onclick=sendTransaction;
-swapBtn.onclick=swapKTC;
-saveAddressBtn.onclick=saveWalletAddress;
-togglePrivBtn.onclick=()=>{showPriv=!showPriv;updateDisplay();};
-renderSavedWallets();
-updateDisplay();
+  createWalletBtn.onclick=createWallet;
+  importWalletBtn.onclick=importWallet;
+  startMiningBtn.onclick=startMining;
+  stopMiningBtn.onclick=stopMining;
+  sendBtn.onclick=sendTransaction;
+  swapBtn.onclick=swapKTC;
+  togglePrivBtn.onclick=()=>{showPriv=!showPriv;updateDisplay();};
+  updateDisplay();
 };
 </script>
 </body>

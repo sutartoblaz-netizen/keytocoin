@@ -130,7 +130,7 @@ async function importWallet(){
   privKey=pk;  
   address=(await hash(pk)).slice(0,32);  
   localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address}));  
-  log("📥 Wallet imported");  
+  log("📥 Wallet imported Private key");  
   updateDisplay();  
 }  
   
@@ -165,7 +165,7 @@ async function mineBlock(){
   });  
   
   const d=await r.json();  
-  log(d.error ? "⛔ "+d.error : "⛏️ KTC"+d.message);  
+  log(d.error ? "⛔ "+d.error : "⛏️ "+d.message);  
   updateDisplay();  
 }  
   
@@ -229,7 +229,7 @@ ws.onmessage = (e)=>{
   }  
 };  
   
-ws.onopen = ()=>log("🔗 P2P connected");  
+ws.onopen = ()=>log("🔗 P2P connected Keytocoin");  
 ws.onerror = ()=>log("⚠️ P2P error");  
 </script> 
   

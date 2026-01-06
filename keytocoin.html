@@ -85,7 +85,6 @@ animation:brickmove 3s linear infinite;
 <p>Address: <span id="address"></span></p>
 <p>Private: <span id="privkey"></span></p>
 <p>Balance: <span id="balance">0</span> KTC</p>
-<p>USDT Balance: <span id="usdtBalance">0.00</span></p>
 
 <hr>
 
@@ -99,13 +98,6 @@ animation:brickmove 3s linear infinite;
 <input id="to" placeholder="Recipient Address">
 <input id="amount" type="number" placeholder="Amount">
 <button id="sendBtn">Send</button>
-
-<hr>
-
-<h3>Swap KTC → USDT</h3>
-<input id="swapAmount" type="number" placeholder="Amount of KTC">
-<button id="swapBtn">Swap</button>
-<p id="swapResult"></p>
 
 <hr>
 
@@ -125,16 +117,12 @@ const privkeyEl = document.getElementById("privkey");
 const balanceEl = document.getElementById("balance");
 const blocksEl = document.getElementById("blocks");
 const supplyEl = document.getElementById("supply");
-const usdtBalanceEl = document.getElementById("usdtBalance");
 const toInput = document.getElementById("to");
 const amountInput = document.getElementById("amount");
-const swapAmount = document.getElementById("swapAmount");
-const swapResult = document.getElementById("swapResult");
 const logEl = document.getElementById("log");
 
 /* STATE */
 let privKey=null, address=null, miningInterval=null;
-let usdtBalance = Number(localStorage.getItem("KTC_USDT")||0);
 let showPriv=false;
 
 /* LOG */
@@ -190,7 +178,6 @@ async function updateDisplay(){
   balanceEl.textContent=i.balance;
   blocksEl.textContent=i.blocks;
   supplyEl.textContent=i.supply;
-  usdtBalanceEl.textContent=usdtBalance.toFixed(2);
 }
 
 /* MINING */
@@ -236,19 +223,6 @@ async function sendTransaction(){
   updateDisplay();
 }
 
-/* SWAP */
-function swapKTC(){
-  const amt=parseInt(swapAmount.value);
-  if(amt<=0) return;
-  const rate=0.65;
-  const usdt=amt*rate;
-  usdtBalance+=usdt;
-  localStorage.setItem("KTC_USDT",usdtBalance);
-  swapResult.textContent=`✅ ${amt} KTC → ${usdt.toFixed(2)} USDT`;
-  log(`🔄 Swap ${amt} KTC → ${usdt.toFixed(2)} USDT`);
-  updateDisplay();
-}
-
 /* INIT */
 window.onload=()=>{
   createWalletBtn.onclick=createWallet;
@@ -256,7 +230,6 @@ window.onload=()=>{
   startMiningBtn.onclick=startMining;
   stopMiningBtn.onclick=stopMining;
   sendBtn.onclick=sendTransaction;
-  swapBtn.onclick=swapKTC;
   togglePrivBtn.onclick=()=>{showPriv=!showPriv;updateDisplay();};
   updateDisplay();
 };

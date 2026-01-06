@@ -1,97 +1,108 @@
+// ================= KEYTOCOIN SERVER (FINAL SYNC) =================
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "20kb" }));
 
+// ================= CONFIG =================
 const PORT = 8882;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 1;
 const MINING_KEY = "EQB1FrLRrNYXPdgidVkVUPG2G-dUi36SyNGnoYQGzc6fZ165";
+const MINING_DELAY = 4000;
 
-const wallets = {};
-const blockchain = [];
+// ================= STATE (IN-MEMORY) =================
+const wallets = {}; // address => { balance, blocks }
 let totalSupply = 0;
+const lastMine = {};
 
-function sha256(data){
-  return crypto.createHash("sha256").update(data).digest("hex");
+// ================= UTILS =================
+function validAddress(addr) {
+  return typeof addr === "string" && /^[a-f0-9]{32}$/.test(addr);
 }
 
-function ensureWallet(address){
-  if(!wallets[address]){
-    wallets[address] = { balance:0, blocks:0 };
+function getWallet(addr) {
+  if (!wallets[addr]) {
+    wallets[addr] = { balance: 0, blocks: 0 };
   }
+  return wallets[addr];
 }
 
-function createBlock(address){
-  const prevHash = blockchain.length
-    ? blockchain[blockchain.length-1].hash
-    : "GENESIS BLOCKCORE";
+// ================= WALLET INFO =================
+app.get("/wallet/:address", (req, res) => {
+  const { address } = req.params;
+  if (!validAddress(address)) {
+    return res.json({ balance: 0, blocks: 0, supply: totalSupply });
+  }
 
-  const block = {
-    index: blockchain.length,
-    timestamp: Date.now(),
-    miner: address,
-    reward: BLOCK_REWARD,
-    prevHash
-  };
-
-  block.hash = sha256(JSON.stringify(block));
-  blockchain.push(block);
-  return block;
-}
-
-app.get("/",(_,res)=>{
-  res.json({status:"KEYTOCOIN MAINNET ONLINE", supply:totalSupply});
-});
-
-app.get("/wallet/:address",(req,res)=>{
-  ensureWallet(req.params.address);
+  const w = getWallet(address);
   res.json({
-    address:req.params.address,
-    balance:wallets[req.params.address].balance,
-    blocks:wallets[req.params.address].blocks,
-    supply:totalSupply
+    balance: w.balance,
+    blocks: w.blocks,
+    supply: totalSupply
   });
 });
 
-app.post("/mine",(req,res)=>{
+// ================= MINING =================
+app.post("/mine", (req, res) => {
   const { address, miningKey } = req.body;
 
-  if(!address) return res.json({error:"No address"});
-  if(miningKey !== MINING_KEY) return res.json({error:"Invalid mining key"});
-  if(totalSupply >= MAX_SUPPLY) return res.json({error:"Max supply reached"});
+  if (miningKey !== MINING_KEY) {
+    return res.status(403).json({ error: "Invalid mining key" });
+  }
 
-  ensureWallet(address);
-  const block = createBlock(address);
-  wallets[address].balance += BLOCK_REWARD;
-  wallets[address].blocks++;
-  totalSupply++;
+  if (!validAddress(address)) {
+    return res.status(400).json({ error: "Invalid address" });
+  }
 
-  res.json({
-    message:"BLOCK MINED SUCCESSFULLY",
-    block
-  });
+  if (totalSupply >= MAX_SUPPLY) {
+    return res.status(403).json({ error: "Max supply reached" });
+  }
+
+  const now = Date.now();
+  if (lastMine[address] && now - lastMine[address] < MINING_DELAY) {
+    return res.status(429).json({ error: "Mining too fast" });
+  }
+
+  lastMine[address] = now;
+
+  const w = getWallet(address);
+  w.balance += BLOCK_REWARD;
+  w.blocks += 1;
+  totalSupply += BLOCK_REWARD;
+
+  res.json({ message: "Block mined successfully" });
 });
 
-app.post("/send",(req,res)=>{
-  const {from,to,amount}=req.body;
-  if(!from||!to||amount<=0) return res.json({error:"Invalid tx"});
+// ================= SEND TX =================
+app.post("/send", (req, res) => {
+  const { from, to, amount } = req.body;
 
-  ensureWallet(from);
-  ensureWallet(to);
+  if (
+    !validAddress(from) ||
+    !validAddress(to) ||
+    typeof amount !== "number" ||
+    amount <= 0
+  ) {
+    return res.status(400).json({ error: "Invalid transaction data" });
+  }
 
-  if(wallets[from].balance < amount)
-    return res.json({error:"Insufficient balance"});
+  const sender = getWallet(from);
+  const receiver = getWallet(to);
 
-  wallets[from].balance -= amount;
-  wallets[to].balance += amount;
+  if (sender.balance < amount) {
+    return res.status(400).json({ error: "Insufficient balance" });
+  }
 
-  res.json({message:`Transferred ${amount} KTC`});
+  sender.balance -= amount;
+  receiver.balance += amount;
+
+  res.json({ message: "Transaction successful" });
 });
 
-app.listen(PORT,()=>{
-  console.log("⛓ KeytoCoin MAINNET running on http://localhost:"+PORT);
+// ================= START =================
+app.listen(PORT, () => {
+  console.log(`🪙 KeytoCoin Server running on http://localhost:${PORT}`);
 });

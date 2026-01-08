@@ -231,8 +231,52 @@ ws.onmessage = (e)=>{
   
 ws.onopen = ()=>log("🔗 P2P connected Keytocoin");  
 ws.onerror = ()=>log("⚠️ P2P error");  
-</script> 
-  
- 
+
+/* ================= POST-QUANTUM LAMPORT ================= */
+async function sha256Hex(msg){
+  const buf = new TextEncoder().encode(msg);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+function lamportGenerate(){
+  const priv = [];
+  const pub = [];
+
+  for(let i=0;i<256;i++){
+    const a = crypto.getRandomValues(new Uint8Array(32));
+    const b = crypto.getRandomValues(new Uint8Array(32));
+
+    priv.push([
+      [...a].map(x=>x.toString(16).padStart(2,"0")).join(""),
+      [...b].map(x=>x.toString(16).padStart(2,"0")).join("")
+    ]);
+  }
+
+  return Promise.all(
+    priv.map(p=>Promise.all([sha256Hex(p[0]), sha256Hex(p[1])]))
+  ).then(pub=>{
+    return { priv, pub };
+  });
+}
+
+function lamportSign(message, priv){
+  const bits = [...message].map(c=>c.charCodeAt(0).toString(2).padStart(8,"0")).join("");
+  return bits.split("").map((b,i)=>priv[i][b]);
+}
+/* ================= COIN RAIN KTC ================= */
+(function coinRain(){
+  setInterval(()=>{
+    const c = document.createElement("div");
+    c.className = "coin";
+    c.style.left = Math.random() * 100 + "vw";
+    c.style.animationDuration = (3 + Math.random() * 4) + "s";
+    c.textContent = "KTC"; // simbol tengah koin
+    document.body.appendChild(c);
+
+    setTimeout(()=>c.remove(),7000);
+  }, 600);
+})();
+</script>
 </body>  
 </html>

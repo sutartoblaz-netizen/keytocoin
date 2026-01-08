@@ -1,148 +1,151 @@
+// ================= IMPORT =================
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
-const http = require("http");
 const WebSocket = require("ws");
+const crypto = require("crypto");
 
-/* ================= CONFIG ================= */
-const PORT = 8882;
+// ================= CONFIG =================
+const HTTP_PORT = 8882;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 1;
-const DIFFICULTY = "0000";
-const MINING_KEY = "EQB1FrLRrNYXPdgidVkVUPG2G-dUi36SyNGnoYQGzc6fZ165";
 
-/* ================= APP ================= */
+// ================= STATE =================
+let wallets = {};   // address => { balance, blocks }
+let totalSupply = 0;
+
+// ================= APP =================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+// ================= HELPERS =================
+function sha256(data){
+  return crypto.createHash("sha256").update(data).digest("hex");
+}
 
-/* ================= STATE ================= */
-let chain = [];
-let mempool = [];
-let balances = {};
-let minedBlocks = {};
-let totalSupply = 0;
+// ================= DIFFICULTY =================
+function currentDifficulty(){
+  if(totalSupply < 5_000_000) return 2;
+  if(totalSupply < 10_000_000) return 3;
+  return 4;
+}
 
-/* ================= UTILS ================= */
-const hash = (data) =>
-  crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex");
+// ================= WEBSOCKET =================
+let wss;
 
-function broadcast(data) {
-  wss.clients.forEach((c) => {
-    if (c.readyState === WebSocket.OPEN) {
-      c.send(JSON.stringify(data));
+function broadcast(msg){
+  const data = JSON.stringify(msg);
+  if(!wss) return;
+  wss.clients.forEach(ws=>{
+    if(ws.readyState === WebSocket.OPEN){
+      ws.send(data);
     }
   });
 }
 
-/* ================= GENESIS ================= */
-function genesis() {
-  const block = {
-    index: 0,
-    time: Date.now(),
-    prevHash: "0",
-    nonce: 0,
-    txs: [],
-  };
-  block.hash = hash(block);
-  chain.push(block);
-}
-genesis();
+// ================= API =================
 
-/* ================= P2P ================= */
-wss.on("connection", (ws) => {
-  console.log("🌐 P2P node connected");
-  ws.send(
-    JSON.stringify({
-      type: "sync",
-      supply: totalSupply,
-      height: chain.length,
-    })
-  );
-});
+// ---------- WALLET INFO ----------
+app.get("/wallet/:address",(req,res)=>{
+  const { address } = req.params;
 
-/* ================= API ================= */
-
-/* WALLET INFO */
-app.get("/wallet/:address", (req, res) => {
-  const addr = req.params.address;
-  res.json({
-    balance: balances[addr] || 0,
-    blocks: minedBlocks[addr] || 0,
-    supply: totalSupply,
-  });
-});
-
-/* SEND TX */
-app.post("/send", (req, res) => {
-  const { from, to, amount } = req.body;
-
-  if (!from || !to || amount <= 0)
-    return res.json({ error: "Invalid transaction" });
-
-  if ((balances[from] || 0) < amount)
-    return res.json({ error: "Insufficient balance" });
-
-  const tx = {
-    id: crypto.randomUUID(),
-    from,
-    to,
-    amount,
-    time: Date.now(),
-  };
-
-  mempool.push(tx);
-  broadcast({ type: "tx", tx });
-
-  res.json({ message: "Transaction sent" });
-});
-
-/* MINE */
-app.post("/mine", (req, res) => {
-  const { address, miningKey } = req.body;
-
-  if (miningKey !== MINING_KEY)
-    return res.json({ error: "Invalid mining key" });
-
-  if (totalSupply >= MAX_SUPPLY)
-    return res.json({ error: "Max supply reached" });
-
-  const block = {
-    index: chain.length,
-    time: Date.now(),
-    prevHash: chain[chain.length - 1].hash,
-    nonce: 0,
-    txs: mempool.splice(0),
-    miner: address,
-  };
-
-  while (!hash(block).startsWith(DIFFICULTY)) {
-    block.nonce++;
+  if(!wallets[address]){
+    wallets[address] = { balance:0, blocks:0 };
   }
 
-  block.hash = hash(block);
-  chain.push(block);
-
-  // reward
-  balances[address] = (balances[address] || 0) + BLOCK_REWARD;
-  minedBlocks[address] = (minedBlocks[address] || 0) + 1;
-  totalSupply += BLOCK_REWARD;
-
-  // apply txs
-  block.txs.forEach((tx) => {
-    balances[tx.from] -= tx.amount;
-    balances[tx.to] = (balances[tx.to] || 0) + tx.amount;
+  res.json({
+    balance: wallets[address].balance,
+    blocks: wallets[address].blocks,
+    supply: totalSupply
   });
-
-  broadcast({ type: "mine", block, supply: totalSupply });
-
-  res.json({ message: "MINED KEYTOCOIN" });
 });
 
-/* ================= START ================= */
-server.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin MAINNET running on port ${PORT}`);
+// ---------- MINE BLOCK (REAL POW LOOP) ----------
+app.post("/mine",(req,res)=>{
+  const { address } = req.body;
+
+  if(!address){
+    return res.json({ error:"Invalid mining request" });
+  }
+
+  if(totalSupply >= MAX_SUPPLY){
+    return res.json({ error:"Max supply reached" });
+  }
+
+  const difficulty = currentDifficulty();
+  let nonce, hash, tries = 0;
+
+  // ===== REAL PoW LOOP =====
+  do{
+    nonce = crypto.randomBytes(16).toString("hex");
+    hash = sha256(address + nonce);
+    tries++;
+  }while(!hash.startsWith("0".repeat(difficulty)));
+
+  if(!wallets[address]){
+    wallets[address] = { balance:0, blocks:0 };
+  }
+
+  wallets[address].balance += BLOCK_REWARD;
+  wallets[address].blocks += 1;
+  totalSupply += BLOCK_REWARD;
+
+  broadcast({
+    type:"mine",
+    address,
+    reward:BLOCK_REWARD,
+    supply: totalSupply
+  });
+
+  res.json({
+    message:`Block mined +${BLOCK_REWARD} KTC`,
+    difficulty,
+    tries
+  });
+});
+
+// ---------- SEND TRANSACTION ----------
+app.post("/send",(req,res)=>{
+  const { from, to, amount } = req.body;
+
+  if(!from || !to || amount <= 0){
+    return res.json({ error:"Invalid transaction" });
+  }
+
+  if(!wallets[from] || wallets[from].balance < amount){
+    return res.json({ error:"Insufficient balance" });
+  }
+
+  if(!wallets[to]){
+    wallets[to] = { balance:0, blocks:0 };
+  }
+
+  wallets[from].balance -= amount;
+  wallets[to].balance += amount;
+
+  broadcast({
+    type:"tx",
+    from,
+    to,
+    amount
+  });
+
+  res.json({ message:`Sent ${amount} KTC` });
+});
+
+// ================= START SERVER =================
+const server = app.listen(HTTP_PORT,()=>{
+  console.log("🚀 KeytoCoin Mainnet running");
+  console.log("🌐 HTTP  http://localhost:"+HTTP_PORT);
+  console.log("🔗 WS    ws://localhost:"+HTTP_PORT);
+});
+
+// ================= P2P =================
+wss = new WebSocket.Server({ server });
+
+wss.on("connection",(ws)=>{
+  ws.send(JSON.stringify({
+    type:"sync",
+    supply: totalSupply
+  }));
 });

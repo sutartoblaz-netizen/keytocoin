@@ -9,7 +9,7 @@ const subtle = webcrypto.subtle;
 /* ================= CONFIG ================= */
 const PORT = 8883;
 const MAX_SUPPLY = 17_000_000;
-const BLOCK_REWARD = 10;
+const BLOCK_REWARD = 17;
 
 /* ================= APP ================= */
 const app = express();
@@ -138,5 +138,5 @@ wss.on("connection", ws => {
 
 /* ================= START ================= */
 server.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin Server running http://localhost:${PORT}`);
+  console.log(`🚀 KeytoCoin Server running http://Global:${PORT}`);
 });

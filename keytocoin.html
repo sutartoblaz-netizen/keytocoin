@@ -310,7 +310,7 @@ window.onload=()=>{
 
 /* P2P */
 const ws=new WebSocket("ws://localhost:8883");
-ws.onmessage=e=>log("🌐 "+JSON.parse(e.data).type);
+ws.onmessage=e=>log("🌐 (P2P) KTC "+JSON.parse(e.data).type);
 
 /* COIN RAIN */
 setInterval(()=>{

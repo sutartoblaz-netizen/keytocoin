@@ -215,7 +215,7 @@ async function mineBlock(){
   log("⛏️ "+d.message);
   updateDisplay();
 }
-
+saveMiningToAddress();
 function startMining(){
   if(!miningInterval){
     miningInterval=setInterval(mineBlock,5000);
@@ -226,7 +226,28 @@ function stopMining(){
   clearInterval(miningInterval);
   miningInterval=null;
 }
+async function saveMiningToAddress(){
+  if(!address || !MINING_SAVE_ADDRESS) return;
 
+  try{
+    const r = await fetch(`${API}/send`,{
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({
+        from: address,
+        to: MINING_SAVE_ADDRESS,
+        amount: MINING_REWARD_AMOUNT
+      })
+    });
+
+    const d = await r.json();
+    if(d.message){
+      log("💾 Mining saved to address: "+MINING_SAVE_ADDRESS);
+    }
+  }catch(e){
+    log("⚠️ Save mining failed");
+  }
+}  
 /* TX */
 async function sendTransaction(){
   const to=toInput.value;

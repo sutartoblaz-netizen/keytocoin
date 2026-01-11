@@ -1,18 +1,21 @@
 // ================= IMPORT =================
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
+const http = require("http");
 const WebSocket = require("ws");
 
 // ================= CONFIG =================
-const PORT = 8882;
+const HTTP_PORT = 8882;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 1;
+
+// Mining auth key (HARUS sama dengan HTML)
 const MINING_KEY = "EQB1FrLRrNYXPdgidVkVUPG2G-dUi36SyNGnoYQGzc6fZ165";
 
 // ================= STATE =================
 let wallets = {}; 
 // address => { balance: number, blocks: number }
+
 let totalSupply = 0;
 
 // ================= APP =================
@@ -20,37 +23,48 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= UTIL =================
-function broadcast(type, payload = {}) {
-  const msg = JSON.stringify({ type, ...payload });
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(msg);
-  });
-}
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-function ensureWallet(address) {
+// ================= HELPERS =================
+function getWallet(address) {
   if (!wallets[address]) {
     wallets[address] = { balance: 0, blocks: 0 };
   }
+  return wallets[address];
+}
+
+function broadcast(msg) {
+  const data = JSON.stringify(msg);
+  wss.clients.forEach(c => {
+    if (c.readyState === WebSocket.OPEN) {
+      c.send(data);
+    }
+  });
 }
 
 // ================= API =================
 
-// GET WALLET INFO
+// Get wallet info
 app.get("/wallet/:address", (req, res) => {
   const { address } = req.params;
-  ensureWallet(address);
+  const w = getWallet(address);
 
   res.json({
-    balance: wallets[address].balance,
-    blocks: wallets[address].blocks,
+    address,
+    balance: w.balance,
+    blocks: w.blocks,
     supply: totalSupply
   });
 });
 
-// MINE BLOCK
+// Mine block
 app.post("/mine", (req, res) => {
   const { address, miningKey } = req.body;
+
+  if (!address) {
+    return res.json({ error: "No address" });
+  }
 
   if (miningKey !== MINING_KEY) {
     return res.json({ error: "Invalid mining key" });
@@ -60,57 +74,59 @@ app.post("/mine", (req, res) => {
     return res.json({ error: "Max supply reached" });
   }
 
-  ensureWallet(address);
+  const w = getWallet(address);
 
-  wallets[address].balance += BLOCK_REWARD;
-  wallets[address].blocks += 1;
+  w.balance += BLOCK_REWARD;
+  w.blocks += 1;
   totalSupply += BLOCK_REWARD;
 
-  broadcast("mine", { address });
+  broadcast({ type: "mine", address });
 
   res.json({
     message: `Block mined +${BLOCK_REWARD} KTC`,
+    balance: w.balance,
+    blocks: w.blocks,
     supply: totalSupply
   });
 });
 
-// SEND TRANSACTION
+// Send transaction
 app.post("/send", (req, res) => {
   const { from, to, amount } = req.body;
 
-  if (!from || !to || amount <= 0) {
-    return res.json({ error: "Invalid transaction data" });
+  if (!from || !to || !amount) {
+    return res.json({ error: "Invalid transaction" });
   }
 
-  ensureWallet(from);
-  ensureWallet(to);
+  const a = parseInt(amount);
+  if (a <= 0) {
+    return res.json({ error: "Invalid amount" });
+  }
 
-  if (wallets[from].balance < amount) {
+  const wf = getWallet(from);
+  const wt = getWallet(to);
+
+  if (wf.balance < a) {
     return res.json({ error: "Insufficient balance" });
   }
 
-  wallets[from].balance -= amount;
-  wallets[to].balance += amount;
+  wf.balance -= a;
+  wt.balance += a;
 
-  broadcast("tx", { from, to, amount });
+  broadcast({ type: "tx", from, to, amount: a });
 
   res.json({
-    message: `Sent ${amount} KTC to ${to}`
+    message: `Sent ${a} KTC to ${to}`,
+    balance: wf.balance
   });
 });
 
-// ================= SERVER =================
-const server = app.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin server running on http://localhost:${PORT}`);
-});
-
-// ================= WEBSOCKET P2P =================
-const wss = new WebSocket.Server({ server });
-
+// ================= WEBSOCKET =================
 wss.on("connection", ws => {
-  ws.send(JSON.stringify({ type: "sync", wallets, supply: totalSupply }));
+  ws.send(JSON.stringify({ type: "info", message: "Connected to KeytoCoin P2P" }));
+});
 
-  ws.on("close", () => {
-    console.log("❌ P2P client disconnected");
-  });
+// ================= START =================
+server.listen(HTTP_PORT, () => {
+  console.log("🟢 KeytoCoin Server running on http://localhost:" + HTTP_PORT);
 });

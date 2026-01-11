@@ -8,7 +8,7 @@ const crypto = require("crypto");
 const path = require("path");
 
 // ================= CONFIG =================
-const HTTP_PORT = process.env.PORT || 8882;
+const HTTP_PORT = process.env.PORT || 8883;
 const WS_PORT = 8883;
 const DATA_DIR = "./data";
 const CHAIN_FILE = path.join(DATA_DIR, "chain.json");

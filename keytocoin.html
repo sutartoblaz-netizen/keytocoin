@@ -79,7 +79,6 @@ input{ width:250px; }
 <button id="createWalletBtn">Create Wallet</button>
 <button id="importWalletBtn">Import Wallet</button>
 <button id="startMiningBtn">Start Mining</button>
-<button id="stopMiningBtn">Stop Mining</button>
 <button id="togglePrivBtn">Show / Hide Private Key</button>
 
 <p>Address: <span id="address"></span></p>
@@ -124,20 +123,6 @@ const logEl = document.getElementById("log");
 /* STATE */
 let privKey=null, address=null, miningInterval=null;
 let showPriv=false;
-
-/* LOCAL MINING STORAGE */
-function getMiningStore(){
-  if(!address) return { blocks:0, reward:0 };
-  return JSON.parse(localStorage.getItem("KTC_MINING_"+address)) || {
-    blocks:0,
-    reward:0
-  };
-}
-function saveMiningStore(data){
-  if(address){
-    localStorage.setItem("KTC_MINING_"+address, JSON.stringify(data));
-  }
-}
 
 /* LOG */
 function log(msg){
@@ -194,7 +179,7 @@ async function updateDisplay(){
   supplyEl.textContent=i.supply;
 }
 
-/* MINING */
+/* MINING (NO STOP, AUTO RUN) */
 async function mineBlock(){
   if(!address) return log("⚠️ Create wallet first");
 
@@ -207,47 +192,17 @@ async function mineBlock(){
   const d = await r.json();
   if(d.error) return log("⛔ "+d.error);
 
-  const store = getMiningStore();
-  store.blocks++;
-  store.reward++;
-  saveMiningStore(store);
-
   log("⛏️ "+d.message);
   updateDisplay();
 }
-saveMiningToAddress();
+
 function startMining(){
   if(!miningInterval){
     miningInterval=setInterval(mineBlock,5000);
-    log("⚙️ Mining started");
+    log("⚙️ Mining started ");
   }
 }
-function stopMining(){
-  clearInterval(miningInterval);
-  miningInterval=null;
-}
-async function saveMiningToAddress(){
-  if(!address || !MINING_SAVE_ADDRESS) return;
 
-  try{
-    const r = await fetch(`${API}/send`,{
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({
-        from: address,
-        to: MINING_SAVE_ADDRESS,
-        amount: MINING_REWARD_AMOUNT
-      })
-    });
-
-    const d = await r.json();
-    if(d.message){
-      log("💾 Mining saved to address: "+MINING_SAVE_ADDRESS);
-    }
-  }catch(e){
-    log("⚠️ Save mining failed");
-  }
-}  
 /* TX */
 async function sendTransaction(){
   const to=toInput.value;
@@ -270,7 +225,6 @@ window.onload=()=>{
   createWalletBtn.onclick=createWallet;
   importWalletBtn.onclick=importWallet;
   startMiningBtn.onclick=startMining;
-  stopMiningBtn.onclick=stopMining;
   sendBtn.onclick=sendTransaction;
   togglePrivBtn.onclick=()=>{showPriv=!showPriv;updateDisplay();};
   updateDisplay();
@@ -282,7 +236,7 @@ ws.onopen=()=>log("🔗 P2P connected");
 ws.onerror=()=>log("⚠️ P2P error");
 ws.onmessage=e=>{
   const m=JSON.parse(e.data);
-  if(m.type==="mine") log("🌐 Network (P2P) mined");
+  if(m.type==="mine") log("🌐 Network (P2P) KTC");
   if(m.type==="tx") log("🌐 Network tx");
   updateDisplay();
 };

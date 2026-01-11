@@ -99,9 +99,7 @@ input{ width:250px; }
 <button id="importWalletBtn">Import Wallet</button>
 <button id="startMiningBtn">Start Mining</button>
 
-<p>
-Address: <span id="address"></span>
-</p>
+<p>Address: <span id="address"></span></p>
 
 <p>
 Private Key:
@@ -177,19 +175,11 @@ async function createWallet(){
     true,
     ["sign","verify"]
   );
-  const rawPriv = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
-  const rawPub  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  privKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+  pubKey  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  address = (await hash(JSON.stringify(pubKey))).slice(0,32);
 
-  privKey = rawPriv;
-  pubKey  = rawPub;
-  address = (await hash(JSON.stringify(rawPub))).slice(0,32);
-
-  localStorage.setItem("KTC_Wallet",JSON.stringify({
-    privKey,
-    pubKey,
-    address
-  }));
-
+  localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
   log("✅ Wallet created (ECDSA)");
   updateDisplay();
 }
@@ -197,45 +187,13 @@ async function createWallet(){
 /* IMPORT WALLET */
 async function importWallet(){
   try{
-    const privInput = prompt("Paste PRIVATE KEY (JWK):");
-    if(!privInput) return;
-    const pubInput = prompt("Paste PUBLIC KEY (JWK):");
-    if(!pubInput) return;
-
-    privKey = JSON.parse(privInput);
-    pubKey  = JSON.parse(pubInput);
+    privKey = JSON.parse(prompt("Paste PRIVATE KEY (JWK):"));
+    pubKey  = JSON.parse(prompt("Paste PUBLIC KEY (JWK):"));
     address = (await hash(JSON.stringify(pubKey))).slice(0,32);
-
-    localStorage.setItem("KTC_Wallet",JSON.stringify({
-      privKey,
-      pubKey,
-      address
-    }));
-
+    localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
     log("📥 Wallet imported");
     updateDisplay();
-  }catch{
-    log("⛔ Invalid key format");
-  }
-}
-
-/* DISPLAY */
-async function updateDisplay(){
-  addressEl.textContent = address || "";
-  privkeyEl.textContent = showPriv && privKey
-    ? JSON.stringify(privKey)
-    : "••••••••";
-  pubkeyEl.textContent = showPub && pubKey
-    ? JSON.stringify(pubKey)
-    : "••••••••";
-
-  if(!address) return;
-  try{
-    const i = await (await fetch(`${API}/wallet/${address}`)).json();
-    balanceEl.textContent = i.balance;
-    blocksEl.textContent = i.blocks;
-    supplyEl.textContent = i.supply;
-  }catch{}
+  }catch{ log("⛔ Invalid key format"); }
 }
 
 /* SIGN TX */
@@ -246,11 +204,62 @@ async function signTransaction(to, amount){
     false, ["sign"]
   );
   const data = new TextEncoder().encode(address + to + amount);
-  const sig = await crypto.subtle.sign(
-    { name:"ECDSA", hash:"SHA-256" },
-    priv, data
-  );
+  const sig = await crypto.subtle.sign({ name:"ECDSA", hash:"SHA-256" }, priv, data);
   return [...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/* VERIFY TX (RECEIVE PROTECTION) */
+async function verifyTransaction(from, to, amount, signature, pubKey){
+  const pub = await crypto.subtle.importKey(
+    "jwk", pubKey,
+    { name:"ECDSA", namedCurve:"P-256" },
+    false, ["verify"]
+  );
+  const data = new TextEncoder().encode(from + to + amount);
+  const sigBytes = new Uint8Array(signature.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+  return crypto.subtle.verify(
+    { name:"ECDSA", hash:"SHA-256" },
+    pub, sigBytes, data
+  );
+}
+
+/* SEND */
+async function sendTransaction(){
+  const to = toInput.value;
+  const amount = parseInt(amountInput.value);
+  const signature = await signTransaction(to, amount);
+
+  if(!(await verifyTransaction(address,to,amount,signature,pubKey))){
+    log("⛔ Signature invalid (client)");
+    return;
+  }
+
+  const r = await fetch(`${API}/send`,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ from:address, to, amount, signature, pubKey })
+  });
+  const d = await r.json();
+  log(d.error ? "⚠️ "+d.error : "➕ "+d.message);
+  syncWallet();
+}
+
+/* SYNC WALLET */
+async function syncWallet(){
+  try{
+    const i = await (await fetch(`${API}/wallet/${address}`)).json();
+    balanceEl.textContent = i.balance;
+    blocksEl.textContent = i.blocks;
+    supplyEl.textContent = i.supply;
+  }catch{}
+}
+
+/* DISPLAY */
+function updateDisplay(){
+  addressEl.textContent = address || "";
+  privkeyEl.textContent = showPriv ? JSON.stringify(privKey) : "••••••••";
+  pubkeyEl.textContent  = showPub  ? JSON.stringify(pubKey)  : "••••••••";
+  if(address) syncWallet();
 }
 
 /* MINING */
@@ -262,7 +271,7 @@ async function mineBlock(){
   });
   const d = await r.json();
   log(d.error ? "⛔ "+d.error : "⛏️ "+d.message);
-  updateDisplay();
+  syncWallet();
 }
 function startMining(){
   if(!miningInterval){
@@ -271,33 +280,9 @@ function startMining(){
   }
 }
 
-/* SEND */
-async function sendTransaction(){
-  const to = toInput.value;
-  const amount = parseInt(amountInput.value);
-  const sig = await signTransaction(to, amount);
-
-  const r = await fetch(`${API}/send`,{
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({ from:address, to, amount, signature:sig, pubKey })
-  });
-  const d = await r.json();
-  log(d.error ? "⚠️ "+d.error : "➕ "+d.message);
-  updateDisplay();
-}
-
 /* TOGGLE */
-togglePriv.onclick=()=>{
-  showPriv=!showPriv;
-  togglePriv.textContent=showPriv?"Hide":"Show";
-  updateDisplay();
-};
-togglePub.onclick=()=>{
-  showPub=!showPub;
-  togglePub.textContent=showPub?"Hide":"Show";
-  updateDisplay();
-};
+togglePriv.onclick=()=>{ showPriv=!showPriv; togglePriv.textContent=showPriv?"Hide":"Show"; updateDisplay(); };
+togglePub.onclick =()=>{ showPub =!showPub;  togglePub.textContent =showPub ?"Hide":"Show"; updateDisplay(); };
 
 /* INIT */
 window.onload=()=>{
@@ -308,9 +293,15 @@ window.onload=()=>{
   updateDisplay();
 };
 
-/* P2P */
+/* P2P RECEIVE SYNC */
 const ws=new WebSocket("ws://localhost:8883");
-ws.onmessage=e=>log("🌐 (P2P) KTC "+JSON.parse(e.data).type);
+ws.onmessage=e=>{
+  const m=JSON.parse(e.data);
+  if(m.type==="tx" && m.to===address){
+    log("📥 Incoming transaction verified");
+    syncWallet();
+  }
+};
 
 /* COIN RAIN */
 setInterval(()=>{

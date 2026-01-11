@@ -15,7 +15,6 @@ body{
   padding:20px;
   overflow-x:hidden;
 }
-
 button,input{
   padding:6px 10px;
   background:#222;
@@ -24,7 +23,6 @@ button,input{
   border-radius:6px;
   margin:2px;
 }
-
 input{ width:250px; }
 
 #log{
@@ -76,15 +74,28 @@ input{ width:250px; }
 </head>
 
 <body>
-
 <h2>🪙 KEYTOCOIN 🪙</h2>
 
 <button id="createWalletBtn">Create Wallet</button>
 <button id="importWalletBtn">Import Wallet</button>
 <button id="startMiningBtn">Start Mining</button>
 
-<p>Address: <span id="address"></span></p>
-<p>Private: <span id="privkey"></span></p>
+<p>
+Address: <span id="address"></span>
+</p>
+
+<p>
+Private Key:
+<span id="privkey">••••••••</span>
+<button id="togglePriv">Show</button>
+</p>
+
+<p>
+Public Key:
+<span id="pubkey">••••••••</span>
+<button id="togglePub">Show</button>
+</p>
+
 <p>Balance: <span id="balance">0</span> KTC</p>
 
 <hr>
@@ -114,6 +125,7 @@ const API = "http://localhost:8883";
 /* DOM */
 const addressEl = document.getElementById("address");
 const privkeyEl = document.getElementById("privkey");
+const pubkeyEl  = document.getElementById("pubkey");
 const balanceEl = document.getElementById("balance");
 const blocksEl = document.getElementById("blocks");
 const supplyEl = document.getElementById("supply");
@@ -122,7 +134,8 @@ const amountInput = document.getElementById("amount");
 const logEl = document.getElementById("log");
 
 /* STATE */
-let privKey=null, address=null, miningInterval=null;
+let privKey=null, pubKey=null, address=null;
+let showPriv=false, showPub=false, miningInterval=null;
 
 /* LOG */
 function log(msg){
@@ -138,84 +151,100 @@ async function hash(data){
   return [...new Uint8Array(dig)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-/* WALLET (ECDSA) */
+/* CREATE WALLET */
 async function createWallet(){
   const keyPair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
+    { name:"ECDSA", namedCurve:"P-256" },
     true,
     ["sign","verify"]
   );
   const rawPriv = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
-  const rawPub = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  const rawPub  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
 
-  privKey = JSON.stringify(rawPriv);
+  privKey = rawPriv;
+  pubKey  = rawPub;
   address = (await hash(JSON.stringify(rawPub))).slice(0,32);
 
-  localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address, pubKey: rawPub}));
+  localStorage.setItem("KTC_Wallet",JSON.stringify({
+    privKey,
+    pubKey,
+    address
+  }));
+
   log("✅ Wallet created (ECDSA)");
   updateDisplay();
 }
 
+/* IMPORT WALLET */
 async function importWallet(){
-  const pk=prompt("Paste Private Key JWK:");
-  if(!pk) return;
-  privKey=pk;
-  const rawPub = JSON.parse(prompt("Paste Public Key JWK:"));
-  address = (await hash(JSON.stringify(rawPub))).slice(0,32);
-  localStorage.setItem("KTC_Wallet",JSON.stringify({privKey,address, pubKey: rawPub}));
-  log("📥 Wallet imported (ECDSA)");
-  updateDisplay();
-}
-
-/* INFO */
-async function getWalletInfo(){
-  if(!address) return {balance:0,blocks:0,supply:0};
   try{
-    return await (await fetch(`${API}/wallet/${address}`)).json();
+    const privInput = prompt("Paste PRIVATE KEY (JWK):");
+    if(!privInput) return;
+    const pubInput = prompt("Paste PUBLIC KEY (JWK):");
+    if(!pubInput) return;
+
+    privKey = JSON.parse(privInput);
+    pubKey  = JSON.parse(pubInput);
+    address = (await hash(JSON.stringify(pubKey))).slice(0,32);
+
+    localStorage.setItem("KTC_Wallet",JSON.stringify({
+      privKey,
+      pubKey,
+      address
+    }));
+
+    log("📥 Wallet imported");
+    updateDisplay();
   }catch{
-    return {balance:0,blocks:0,supply:0};
+    log("⛔ Invalid key format");
   }
 }
 
 /* DISPLAY */
 async function updateDisplay(){
-  addressEl.textContent=address||"";
-  privkeyEl.textContent=privKey?privKey.slice(0,16)+"...":"";
-  const i=await getWalletInfo();
-  balanceEl.textContent=i.balance;
-  blocksEl.textContent=i.blocks;
-  supplyEl.textContent=i.supply;
+  addressEl.textContent = address || "";
+  privkeyEl.textContent = showPriv && privKey
+    ? JSON.stringify(privKey)
+    : "••••••••";
+  pubkeyEl.textContent = showPub && pubKey
+    ? JSON.stringify(pubKey)
+    : "••••••••";
+
+  if(!address) return;
+  try{
+    const i = await (await fetch(`${API}/wallet/${address}`)).json();
+    balanceEl.textContent = i.balance;
+    blocksEl.textContent = i.blocks;
+    supplyEl.textContent = i.supply;
+  }catch{}
 }
 
-/* SIGNING */
+/* SIGN TX */
 async function signTransaction(to, amount){
-  if(!privKey) return null;
   const priv = await crypto.subtle.importKey(
-    "jwk",
-    JSON.parse(privKey),
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"]
+    "jwk", privKey,
+    { name:"ECDSA", namedCurve:"P-256" },
+    false, ["sign"]
   );
   const data = new TextEncoder().encode(address + to + amount);
-  const sig = await crypto.subtle.sign({name:"ECDSA", hash:"SHA-256"}, priv, data);
+  const sig = await crypto.subtle.sign(
+    { name:"ECDSA", hash:"SHA-256" },
+    priv, data
+  );
   return [...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
 /* MINING */
 async function mineBlock(){
-  if(!address) return log("⚠️ Create wallet first");
   const r = await fetch(`${API}/mine`,{
     method:"POST",
-    headers:{"Content-Type":"application/json"},
+    headers:{ "Content-Type":"application/json" },
     body:JSON.stringify({ address })
   });
   const d = await r.json();
-  if(d.error) return log("⛔ "+d.error);
-  log("⛏️ "+d.message);
+  log(d.error ? "⛔ "+d.error : "⛏️ "+d.message);
   updateDisplay();
 }
-
 function startMining(){
   if(!miningInterval){
     miningInterval=setInterval(mineBlock,5000);
@@ -223,24 +252,33 @@ function startMining(){
   }
 }
 
-/* SEND TX */
+/* SEND */
 async function sendTransaction(){
   const to = toInput.value;
   const amount = parseInt(amountInput.value);
-  if(!to||amount<=0) return;
-
-  const walletData = JSON.parse(localStorage.getItem("KTC_Wallet") || "{}");
   const sig = await signTransaction(to, amount);
 
   const r = await fetch(`${API}/send`,{
     method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ from: address, to, amount, signature: sig, pubKey: walletData.pubKey })
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ from:address, to, amount, signature:sig, pubKey })
   });
   const d = await r.json();
-  log(d.error?("⚠️ "+d.error):("➕ "+d.message));
+  log(d.error ? "⚠️ "+d.error : "➕ "+d.message);
   updateDisplay();
 }
+
+/* TOGGLE */
+togglePriv.onclick=()=>{
+  showPriv=!showPriv;
+  togglePriv.textContent=showPriv?"Hide":"Show";
+  updateDisplay();
+};
+togglePub.onclick=()=>{
+  showPub=!showPub;
+  togglePub.textContent=showPub?"Hide":"Show";
+  updateDisplay();
+};
 
 /* INIT */
 window.onload=()=>{
@@ -253,14 +291,7 @@ window.onload=()=>{
 
 /* P2P */
 const ws=new WebSocket("ws://localhost:8883");
-ws.onopen=()=>log("🔗 P2P connected");
-ws.onerror=()=>log("⚠️ P2P error");
-ws.onmessage=e=>{
-  const m=JSON.parse(e.data);
-  if(m.type==="mine") log("🌐 Network (P2P) KTC");
-  if(m.type==="tx") log("🌐 Network tx");
-  updateDisplay();
-};
+ws.onmessage=e=>log("🌐 "+JSON.parse(e.data).type);
 
 /* COIN RAIN */
 setInterval(()=>{
@@ -273,6 +304,5 @@ setInterval(()=>{
   setTimeout(()=>c.remove(),7000);
 },600);
 </script>
-
 </body>
 </html>

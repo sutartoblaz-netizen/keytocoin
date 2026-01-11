@@ -133,7 +133,7 @@ app.post("/mine", (req, res) => {
   saveAll();
   broadcast({ type: "mine" });
 
-  res.json({ message: "Block mined" });
+  res.json({ message: "Block mined KTC" });
 });
 
 app.post("/send", (req, res) => {

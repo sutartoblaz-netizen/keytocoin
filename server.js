@@ -14,7 +14,7 @@ const DATA_DIR = "./data";
 const CHAIN_FILE = path.join(DATA_DIR, "chain.json");
 const WALLET_FILE = path.join(DATA_DIR, "wallets.json");
 const MAX_SUPPLY = 17000000;
-const MINING_REWARD = 10;
+const MINING_REWARD = 17;
 
 // ================= INIT DIR =================
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);

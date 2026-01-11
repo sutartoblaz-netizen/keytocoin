@@ -121,8 +121,23 @@ const toInput = document.getElementById("to");
 const amountInput = document.getElementById("amount");
 const logEl = document.getElementById("log");
 
+/* STATE */
 let privKey=null, address=null, miningInterval=null;
 let showPriv=false;
+
+/* LOCAL MINING STORAGE */
+function getMiningStore(){
+  if(!address) return { blocks:0, reward:0 };
+  return JSON.parse(localStorage.getItem("KTC_MINING_"+address)) || {
+    blocks:0,
+    reward:0
+  };
+}
+function saveMiningStore(data){
+  if(address){
+    localStorage.setItem("KTC_MINING_"+address, JSON.stringify(data));
+  }
+}
 
 /* LOG */
 function log(msg){
@@ -183,14 +198,21 @@ async function updateDisplay(){
 async function mineBlock(){
   if(!address) return log("⚠️ Create wallet first");
 
-  const r=await fetch(`${API}/mine`,{
+  const r = await fetch(`${API}/mine`,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({address,miningKey:MINING_KEY})
+    body:JSON.stringify({ address, miningKey: MINING_KEY })
   });
 
-  const d=await r.json();
-  log(d.error?("⛔ "+d.error):("⛏️ "+d.message));
+  const d = await r.json();
+  if(d.error) return log("⛔ "+d.error);
+
+  const store = getMiningStore();
+  store.blocks++;
+  store.reward++;
+  saveMiningStore(store);
+
+  log("⛏️ "+d.message);
   updateDisplay();
 }
 
@@ -236,9 +258,10 @@ window.onload=()=>{
 /* P2P */
 const ws=new WebSocket("ws://localhost:8882");
 ws.onopen=()=>log("🔗 P2P connected");
+ws.onerror=()=>log("⚠️ P2P error");
 ws.onmessage=e=>{
   const m=JSON.parse(e.data);
-  if(m.type==="mine") log("🌐 Network mined");
+  if(m.type==="mine") log("🌐 Network (P2P) mined");
   if(m.type==="tx") log("🌐 Network tx");
   updateDisplay();
 };

@@ -240,7 +240,7 @@ async function sendTransaction(){
     body:JSON.stringify({ from:address, to, amount, signature, pubKey })
   });
   const d = await r.json();
-  log(d.error ? "⚠️ "+d.error : "➕ "+d.message);
+  log(d.error ? "⚠️ "+d.error : "📨 "+d.message);
   syncWallet();
 }
 

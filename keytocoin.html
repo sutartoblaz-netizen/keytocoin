@@ -1,239 +1,321 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const http = require("http");
-const WebSocket = require("ws");
-const { webcrypto, createHash } = require("crypto");
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>KeytoCoin Wallet</title>
 
-const subtle = webcrypto.subtle;
-
-/* ================= CONFIG ================= */
-const PORT = 8883;
-const MAX_SUPPLY = 17_000_000;
-const BLOCK_REWARD = 17;
-const MINE_COOLDOWN = 15_000;
-
-/* ================= APP ================= */
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-app.use(bodyParser.json({ limit: "50kb" }));
-
-/* ================= STATE ================= */
-const wallets = {};
-const rateLimit = {};
-let totalSupply = 0;
-let blockHeight = 0;
-
-/* ================= UTILS ================= */
-function sha256(data) {
-  return createHash("sha256").update(data).digest("hex");
+<style>
+html, body{
+  width:100%;
+  height:100%;
+  margin:0;
+  padding:0;
 }
 
-function hexToBuf(hex) {
-  if (!/^[0-9a-f]+$/i.test(hex)) return null;
-  return new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+body{
+  background:
+    linear-gradient(rgba(0,0,0,0.75), rgba(0,0,0,0.85)),
+    url("keytocoin.png") no-repeat center center fixed;
+  background-size: cover;
+  color:#0f0;
+  font-family:monospace;
+  padding:20px;
+  overflow-x:hidden;
+  min-width:100vw;
+  min-height:100vh;
+  box-sizing:border-box;
 }
 
-function getIP(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+*, *::before, *::after{
+  box-sizing:border-box;
 }
 
-function allowRate(ip, limit = 10, time = 10_000) {
-  const now = Date.now();
-  rateLimit[ip] ??= [];
-  rateLimit[ip] = rateLimit[ip].filter(t => now - t < time);
-  if (rateLimit[ip].length >= limit) return false;
-  rateLimit[ip].push(now);
-  return true;
+button,input{
+  padding:6px 10px;
+  background:#222;
+  color:#0f0;
+  border:1px solid #0f0;
+  border-radius:6px;
+  margin:2px;
 }
 
-/* ================= ADDRESS NORMALIZER ================= */
-function normalizeAddress(address, pubKey = null) {
-  if (typeof address === "string" && /^[a-f0-9]{64}$/i.test(address)) {
-    return address;
+input{ width:250px; }
+
+#log{
+  max-height:200px;
+  overflow-y:auto;
+  background:#222;
+  padding:10px;
+  border:1px solid #0f0;
+}
+
+/* COIN RAIN */
+.coin{
+  position:fixed;
+  top:-60px;
+  width:50px;
+  height:50px;
+  border-radius:50%;
+  background:radial-gradient(circle at 30% 30%,#ffd700,#c99700);
+  box-shadow:0 0 10px #ff0,inset 0 0 10px #c90;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:bold;
+  color:#111;
+  font-size:14px;
+  animation:fall linear forwards;
+  z-index:-1;
+}
+
+@keyframes fall{
+  to{ transform:translateY(110vh) rotate(360deg); opacity:0.85; }
+}
+
+/* BRICK TEXT */
+.brick-text{
+  font-size:30px;
+  font-weight:bold;
+  display:inline-block;
+  background:linear-gradient(90deg,#ff0000,#ff6600,#ffcc00);
+  background-size:200% auto;
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  animation:brickmove 3s linear infinite;
+}
+
+@keyframes brickmove{
+  0%{background-position:0% center;}
+  100%{background-position:200% center;}
+}
+</style>
+</head>
+
+<body>
+<h2>🪙 KEYTOCOIN 🪙</h2>
+
+<button id="createWalletBtn">Create Wallet</button>
+<button id="importWalletBtn">Import Wallet</button>
+<button id="startMiningBtn">Start Mining</button>
+
+<p>Address: <span id="address"></span></p>
+
+<p>
+Private Key:
+<span id="privkey">••••••••</span>
+<button id="togglePriv">Show</button>
+</p>
+
+<p>
+Public Key:
+<span id="pubkey">••••••••</span>
+<button id="togglePub">Show</button>
+</p>
+
+<p>Balance: <span id="balance">0</span> KTC</p>
+
+<hr>
+
+<h3>Mining</h3>
+<p>Mined Blocks: <span id="blocks">0</span></p>
+<p>Total Supply: <span id="supply">0</span> / 17,000,000 KTC</p>
+
+<hr>
+
+<h3>Send Transaction</h3>
+<input id="to" placeholder="Recipient Address">
+<input id="amount" type="number" placeholder="Amount">
+<button id="sendBtn">Send</button>
+
+<hr>
+
+<h3>Blockchain Log</h3>
+<pre id="log"></pre>
+
+<div align="center"><span class="brick-text">⛓⛏KEYTOCOIN⛏⛓</span></div>
+<div align="center"><span class="brick-text">⛓⛏BLOCKCHAIN⛏⛓</span></div>
+
+<script>
+const API = "http://localhost:8883";
+
+/* DOM */
+const addressEl = document.getElementById("address");
+const privkeyEl = document.getElementById("privkey");
+const pubkeyEl  = document.getElementById("pubkey");
+const balanceEl = document.getElementById("balance");
+const blocksEl = document.getElementById("blocks");
+const supplyEl = document.getElementById("supply");
+const toInput = document.getElementById("to");
+const amountInput = document.getElementById("amount");
+const logEl = document.getElementById("log");
+
+/* STATE */
+let privKey=null, pubKey=null, address=null;
+let showPriv=false, showPub=false, miningInterval=null;
+
+/* LOG */
+function log(msg){
+  const d=document.createElement("div");
+  d.textContent=msg;
+  logEl.prepend(d);
+}
+
+/* HASH */
+async function hash(data){
+  const buf=new TextEncoder().encode(data);
+  const dig=await crypto.subtle.digest("SHA-256",buf);
+  return [...new Uint8Array(dig)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/* CREATE WALLET */
+async function createWallet(){
+  const keyPair = await crypto.subtle.generateKey(
+    { name:"ECDSA", namedCurve:"P-256" },
+    true,
+    ["sign","verify"]
+  );
+  privKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+  pubKey  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  // slice 64 hex (256-bit)
+  address = (await hash(JSON.stringify(pubKey))).slice(0,64);
+
+  localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
+  log("✅ Wallet created (ECDSA)");
+  updateDisplay();
+}
+
+/* IMPORT WALLET */
+async function importWallet(){
+  try{
+    privKey = JSON.parse(prompt("Paste PRIVATE KEY (JWK):"));
+    pubKey  = JSON.parse(prompt("Paste PUBLIC KEY (JWK):"));
+    // slice 64 hex (256-bit)
+    address = (await hash(JSON.stringify(pubKey))).slice(0,64);
+    localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
+    log("📥 Wallet imported");
+    updateDisplay();
+  }catch{ log("⛔ Invalid key format"); }
+}
+
+/* SIGN TX */
+async function signTransaction(to, amount){
+  const priv = await crypto.subtle.importKey(
+    "jwk", privKey,
+    { name:"ECDSA", namedCurve:"P-256" },
+    false, ["sign"]
+  );
+  const data = new TextEncoder().encode(address + to + amount);
+  const sig = await crypto.subtle.sign({ name:"ECDSA", hash:"SHA-256" }, priv, data);
+  return [...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/* VERIFY TX (RECEIVE PROTECTION) */
+async function verifyTransaction(from, to, amount, signature, pubKey){
+  const pub = await crypto.subtle.importKey(
+    "jwk", pubKey,
+    { name:"ECDSA", namedCurve:"P-256" },
+    false, ["verify"]
+  );
+  const data = new TextEncoder().encode(from + to + amount);
+  const sigBytes = new Uint8Array(signature.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+  return crypto.subtle.verify(
+    { name:"ECDSA", hash:"SHA-256" },
+    pub, sigBytes, data
+  );
+}
+
+/* SEND */
+async function sendTransaction(){
+  const to = toInput.value;
+  const amount = parseInt(amountInput.value);
+  const signature = await signTransaction(to, amount);
+
+  if(!(await verifyTransaction(address,to,amount,signature,pubKey))){
+    log("⛔ Signature invalid (client)");
+    return;
   }
-  if (pubKey) {
-    return sha256(JSON.stringify(pubKey));
-  }
-  return null;
-}
 
-function broadcast(msg) {
-  const data = JSON.stringify(msg);
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(data);
+  const r = await fetch(`${API}/send`,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ from:address, to, amount, signature, pubKey })
   });
+  const d = await r.json();
+  log(d.error ? "⚠️ "+d.error : "📨 "+d.message);
+  syncWallet();
 }
 
-/* ================= WALLET ================= */
-function getWallet(address) {
-  if (!wallets[address]) {
-    wallets[address] = {
-      balance: 0,
-      blocks: 0,
-      nonce: 0,
-      pubKey: null,
-      lastMine: 0
-    };
-  }
-  return wallets[address];
+/* SYNC WALLET */
+async function syncWallet(){
+  try{
+    const i = await (await fetch(`${API}/wallet/${address}`)).json();
+    balanceEl.textContent = i.balance;
+    blocksEl.textContent = i.blocks;
+    supplyEl.textContent = i.supply;
+  }catch{}
 }
 
-/* ================= VERIFY SIGNATURE ================= */
-async function verifySignature({ from, to, amount, nonce, signature, pubKey }) {
-  try {
-    const derived = sha256(JSON.stringify(pubKey));
-    if (derived !== from) return false;
-
-    const wallet = getWallet(from);
-
-    if (!wallet.pubKey) {
-      wallet.pubKey = pubKey;
-    } else if (JSON.stringify(wallet.pubKey) !== JSON.stringify(pubKey)) {
-      return false;
-    }
-
-    const key = await subtle.importKey(
-      "jwk",
-      pubKey,
-      { name: "ECDSA", namedCurve: "P-256" },
-      false,
-      ["verify"]
-    );
-
-    const data = new TextEncoder().encode(
-      from + to + amount + nonce
-    );
-
-    const sig = hexToBuf(signature);
-    if (!sig) return false;
-
-    return await subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" },
-      key,
-      sig,
-      data
-    );
-  } catch {
-    return false;
-  }
+/* DISPLAY */
+function updateDisplay(){
+  addressEl.textContent = address || "";
+  privkeyEl.textContent = showPriv ? JSON.stringify(privKey) : "••••••••";
+  pubkeyEl.textContent  = showPub  ? JSON.stringify(pubKey)  : "••••••••";
+  if(address) syncWallet();
 }
 
-/* ================= API ================= */
-
-app.get("/wallet/:address", (req, res) => {
-  const address = normalizeAddress(req.params.address);
-  if (!address) return res.json({ error: "Invalid address" });
-
-  const w = getWallet(address);
-  res.json({
-    address,
-    balance: w.balance,
-    blocks: w.blocks,
-    nonce: w.nonce,
-    supply: totalSupply,
-    height: blockHeight
+/* MINING */
+async function mineBlock(){
+  const r = await fetch(`${API}/mine`,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ address })
   });
-});
-
-/* ================= SEND ================= */
-app.post("/send", async (req, res) => {
-  const ip = getIP(req);
-  if (!allowRate(ip)) {
-    return res.json({ error: "Too many requests" });
+  const d = await r.json();
+  log(d.error ? "⛔ "+d.error : "⛏️ "+d.message);
+  syncWallet();
+}
+function startMining(){
+  if(!miningInterval){
+    miningInterval=setInterval(mineBlock,5000);
+    log("⚙️ Mining started");
   }
+}
 
-  let { from, to, amount, nonce, signature, pubKey } = req.body;
+/* TOGGLE */
+togglePriv.onclick=()=>{ showPriv=!showPriv; togglePriv.textContent=showPriv?"Hide":"Show"; updateDisplay(); };
+togglePub.onclick =()=>{ showPub =!showPub;  togglePub.textContent =showPub ?"Hide":"Show"; updateDisplay(); };
 
-  from = normalizeAddress(from, pubKey);
-  to = normalizeAddress(to);
+/* INIT */
+window.onload=()=>{
+  createWalletBtn.onclick=createWallet;
+  importWalletBtn.onclick=importWallet;
+  startMiningBtn.onclick=startMining;
+  sendBtn.onclick=sendTransaction;
+  updateDisplay();
+};
 
-  if (!from || !to || from === to) {
-    return res.json({ error: "Invalid address" });
+/* P2P RECEIVE SYNC */
+const ws=new WebSocket("ws://localhost:8883");
+ws.onmessage=e=>{
+  const m=JSON.parse(e.data);
+  if(m.type==="tx" && m.to===address){
+    log("📥 Incoming transaction verified");
+    syncWallet();
   }
+};
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return res.json({ error: "Invalid amount" });
-  }
+/* COIN RAIN */
+setInterval(()=>{
+  const c=document.createElement("div");
+  c.className="coin";
+  c.style.left=Math.random()*100+"vw";
+  c.style.animationDuration=(3+Math.random()*4)+"s";
+  c.textContent="KTC";
+  document.body.appendChild(c);
+  setTimeout(()=>c.remove(),7000);
+},600);
+</script>
 
-  const sender = getWallet(from);
-  const receiver = getWallet(to);
-
-  if (nonce !== sender.nonce) {
-    return res.json({ error: "Invalid nonce" });
-  }
-
-  if (sender.balance < amount) {
-    return res.json({ error: "Insufficient balance" });
-  }
-
-  const valid = await verifySignature({
-    from, to, amount, nonce, signature, pubKey
-  });
-
-  if (!valid) {
-    return res.json({ error: "Invalid signature" });
-  }
-
-  sender.balance -= amount;
-  receiver.balance += amount;
-  sender.nonce++;
-
-  broadcast({ type: "tx", from, to, amount });
-
-  res.json({ message: "Transaction confirmed", from, to });
-});
-
-/* ================= MINE ================= */
-app.post("/mine", (req, res) => {
-  const ip = getIP(req);
-  if (!allowRate(ip, 3, 10_000)) {
-    return res.json({ error: "Mining rate limited" });
-  }
-
-  let { address, pubKey } = req.body;
-  address = normalizeAddress(address, pubKey);
-
-  if (!address) {
-    return res.json({ error: "Invalid address" });
-  }
-
-  const w = getWallet(address);
-  const now = Date.now();
-
-  if (now - w.lastMine < MINE_COOLDOWN) {
-    return res.json({ error: "Mining cooldown active" });
-  }
-
-  if (totalSupply >= MAX_SUPPLY) {
-    return res.json({ error: "Max supply reached" });
-  }
-
-  const reward = Math.min(BLOCK_REWARD, MAX_SUPPLY - totalSupply);
-
-  w.balance += reward;
-  w.blocks++;
-  w.lastMine = now;
-
-  totalSupply += reward;
-  blockHeight++;
-
-  broadcast({ type: "mine", address, reward });
-
-  res.json({ message: `Block mined 🪙 +${reward} KTC`, address });
-});
-
-/* ================= WEBSOCKET ================= */
-wss.on("connection", ws => {
-  ws.send(JSON.stringify({
-    type: "sync",
-    supply: totalSupply,
-    height: blockHeight
-  }));
-});
-
-/* ================= START ================= */
-server.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin Final Server running on port ${PORT}`);
-});
+</body>
+</html>

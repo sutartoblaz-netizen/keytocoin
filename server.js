@@ -131,4 +131,4 @@ ws.send(JSON.stringify({ type:"info", message:"Connected to KeytoCoin WS" }));
 });
 
 /* ================= START SERVER ================= */
-server.listen(PORT, ()=>console.log(📡 ⛓️ KeytoCoin server running at http://Keytocoin.Global:${PORT}));
+server.listen(PORT, ()=>console.log(📡 ⛓️ KeytoCoin server running at http://localhost:${PORT}));

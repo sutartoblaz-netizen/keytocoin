@@ -177,7 +177,8 @@ async function createWallet(){
   );
   privKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
   pubKey  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-  address = (await hash(JSON.stringify(pubKey))).slice(0,32);
+  // slice 64 hex (256-bit)
+  address = (await hash(JSON.stringify(pubKey))).slice(0,64);
 
   localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
   log("✅ Wallet created (ECDSA)");
@@ -189,7 +190,8 @@ async function importWallet(){
   try{
     privKey = JSON.parse(prompt("Paste PRIVATE KEY (JWK):"));
     pubKey  = JSON.parse(prompt("Paste PUBLIC KEY (JWK):"));
-    address = (await hash(JSON.stringify(pubKey))).slice(0,32);
+    // slice 64 hex (256-bit)
+    address = (await hash(JSON.stringify(pubKey))).slice(0,64);
     localStorage.setItem("KTC_Wallet",JSON.stringify({ privKey, pubKey, address }));
     log("📥 Wallet imported");
     updateDisplay();

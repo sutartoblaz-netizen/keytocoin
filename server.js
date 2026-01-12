@@ -10,6 +10,7 @@ const subtle = webcrypto.subtle;
 const PORT = 8883;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 17;
+const MINE_COOLDOWN = 15_000;
 
 /* ================= APP ================= */
 const app = express();
@@ -25,13 +26,13 @@ let totalSupply = 0;
 let blockHeight = 0;
 
 /* ================= UTILS ================= */
+function sha256(data) {
+  return createHash("sha256").update(data).digest("hex");
+}
+
 function hexToBuf(hex) {
   if (!/^[0-9a-f]+$/i.test(hex)) return null;
   return new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
-}
-
-function sha256(data) {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 function getIP(req) {
@@ -45,6 +46,17 @@ function allowRate(ip, limit = 10, time = 10_000) {
   if (rateLimit[ip].length >= limit) return false;
   rateLimit[ip].push(now);
   return true;
+}
+
+/* ================= ADDRESS NORMALIZER ================= */
+function normalizeAddress(address, pubKey = null) {
+  if (typeof address === "string" && /^[a-f0-9]{64}$/i.test(address)) {
+    return address;
+  }
+  if (pubKey) {
+    return sha256(JSON.stringify(pubKey));
+  }
+  return null;
 }
 
 function broadcast(msg) {
@@ -61,7 +73,8 @@ function getWallet(address) {
       balance: 0,
       blocks: 0,
       nonce: 0,
-      pubKey: null
+      pubKey: null,
+      lastMine: 0
     };
   }
   return wallets[address];
@@ -70,8 +83,16 @@ function getWallet(address) {
 /* ================= VERIFY SIGNATURE ================= */
 async function verifySignature({ from, to, amount, nonce, signature, pubKey }) {
   try {
-    const derivedAddress = sha256(JSON.stringify(pubKey));
-    if (derivedAddress !== from) return false;
+    const derived = sha256(JSON.stringify(pubKey));
+    if (derived !== from) return false;
+
+    const wallet = getWallet(from);
+
+    if (!wallet.pubKey) {
+      wallet.pubKey = pubKey;
+    } else if (JSON.stringify(wallet.pubKey) !== JSON.stringify(pubKey)) {
+      return false;
+    }
 
     const key = await subtle.importKey(
       "jwk",
@@ -102,8 +123,12 @@ async function verifySignature({ from, to, amount, nonce, signature, pubKey }) {
 /* ================= API ================= */
 
 app.get("/wallet/:address", (req, res) => {
-  const w = getWallet(req.params.address);
+  const address = normalizeAddress(req.params.address);
+  if (!address) return res.json({ error: "Invalid address" });
+
+  const w = getWallet(address);
   res.json({
+    address,
     balance: w.balance,
     blocks: w.blocks,
     nonce: w.nonce,
@@ -112,17 +137,20 @@ app.get("/wallet/:address", (req, res) => {
   });
 });
 
-/* ================= SEND TX ================= */
+/* ================= SEND ================= */
 app.post("/send", async (req, res) => {
   const ip = getIP(req);
   if (!allowRate(ip)) {
     return res.json({ error: "Too many requests" });
   }
 
-  const { from, to, amount, nonce, signature, pubKey } = req.body;
+  let { from, to, amount, nonce, signature, pubKey } = req.body;
 
-  if (!from || !to || !signature || !pubKey) {
-    return res.json({ error: "Invalid data" });
+  from = normalizeAddress(from, pubKey);
+  to = normalizeAddress(to);
+
+  if (!from || !to || from === to) {
+    return res.json({ error: "Invalid address" });
   }
 
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -154,28 +182,46 @@ app.post("/send", async (req, res) => {
 
   broadcast({ type: "tx", from, to, amount });
 
-  res.json({ message: "Transaction confirmed" });
+  res.json({ message: "Transaction confirmed", from, to });
 });
 
-/* ================= MINE (NO LIMIT, NO COOLDOWN) ================= */
+/* ================= MINE ================= */
 app.post("/mine", (req, res) => {
-  const { address } = req.body;
-  if (!address) return res.json({ error: "No address" });
+  const ip = getIP(req);
+  if (!allowRate(ip, 3, 10_000)) {
+    return res.json({ error: "Mining rate limited" });
+  }
 
-  if (totalSupply + BLOCK_REWARD > MAX_SUPPLY) {
-    return res.json({ error: "Max supply reached" });
+  let { address, pubKey } = req.body;
+  address = normalizeAddress(address, pubKey);
+
+  if (!address) {
+    return res.json({ error: "Invalid address" });
   }
 
   const w = getWallet(address);
+  const now = Date.now();
 
-  w.balance += BLOCK_REWARD;
+  if (now - w.lastMine < MINE_COOLDOWN) {
+    return res.json({ error: "Mining cooldown active" });
+  }
+
+  if (totalSupply >= MAX_SUPPLY) {
+    return res.json({ error: "Max supply reached" });
+  }
+
+  const reward = Math.min(BLOCK_REWARD, MAX_SUPPLY - totalSupply);
+
+  w.balance += reward;
   w.blocks++;
-  totalSupply += BLOCK_REWARD;
+  w.lastMine = now;
+
+  totalSupply += reward;
   blockHeight++;
 
-  broadcast({ type: "mine", address, reward: BLOCK_REWARD });
+  broadcast({ type: "mine", address, reward });
 
-  res.json({ message: ` Block mined 🪙 +${BLOCK_REWARD} KTC` });
+  res.json({ message: `Block mined 🪙 +${reward} KTC`, address });
 });
 
 /* ================= WEBSOCKET ================= */
@@ -189,5 +235,5 @@ wss.on("connection", ws => {
 
 /* ================= START ================= */
 server.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin Secure Server running on port ${PORT}`);
+  console.log(`🚀 KeytoCoin Final Server running on port ${PORT}`);
 });

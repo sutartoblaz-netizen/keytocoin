@@ -138,5 +138,5 @@ wss.on("connection", ws => {
 
 /* ================= START ================= */
 server.listen(PORT, () => {
-  console.log(`🚀 KeytoCoin Server running http://Global:${PORT}`);
+  console.log(`🚀 KeytoCoin Server running http://keytocoin.global:${PORT}`);
 });

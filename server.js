@@ -98,19 +98,53 @@ app.post("/send", async (req, res) => {
 });
 
 // POST mine
+ // ⛏️ MINING – FIXED
 app.post("/mine", async (req, res) => {
   const { address, nonce, powHash } = req.body;
-  if (!address || nonce == null || !powHash) {
-    return res.json({ error: "Invalid mine request" });
-  }
+  if (!address || nonce === undefined || !powHash)
+    return res.json({ error: "Invalid mining data" });
 
   updateWallet(address);
 
   const now = Date.now();
-  if (now - wallets[address].lastMine < MINE_COOLDOWN) {
-    const wait = Math.ceil((MINE_COOLDOWN - (now - wallets[address].lastMine)) / 1000);
-    return res.json({ error: `Cooldown active. Wait ${wait}s` });
-  }
+
+  if (now - wallets[address].lastMine < MINE_COOLDOWN)
+    return res.json({ error: "Cooldown active" });
+
+  if (getTotalSupply() + BLOCK_REWARD > MAX_SUPPLY)
+    return res.json({ error: "Max supply reached" });
+
+  // ✅ DETERMINISTIC CHALLENGE
+  const challenge = getChallenge();
+
+  // ✅ HASH MUST MATCH CLIENT EXACTLY
+  const verify = await hash(address + challenge + nonce);
+
+  if (verify !== powHash)
+    return res.json({ error: "Hash mismatch" });
+
+  if (!verify.startsWith(DIFFICULTY))
+    return res.json({ error: "Invalid PoW" });
+
+  wallets[address].balance += BLOCK_REWARD;
+  wallets[address].blocks += 1;
+  wallets[address].lastMine = now;
+
+  blockchain.push({
+    index: blockchain.length,
+    miner: address,
+    nonce,
+    reward: BLOCK_REWARD,
+    prev: challenge,
+    hash: verify,
+    timestamp: now
+  });
+
+  res.json({
+    mined: true,
+    reward: BLOCK_REWARD
+  });
+});
 
   // Simple PoW verification (tidak strict karena timestamp berubah)
   const checkHash = await hash(address + "|" + now + "|" + nonce);
@@ -119,20 +153,13 @@ app.post("/mine", async (req, res) => {
   }
 
   wallets[address].balance += BLOCK_REWARD;
-  wallets[address].blocks += 1;
-  wallets[address].lastMine = now;
-
+  wallets[address].block
   blockchain.push({ miner: address, reward: BLOCK_REWARD, nonce, powHash, timestamp: now });
 
   // Broadcast mined block
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ type: "mine", miner: address, reward: BLOCK_REWARD }));
-    }
-  });
-
-  res.json({ message: `Block mined! +${BLOCK_REWARD} KTC` });
-});
+      client.send(JSON.stringify({ type: "mine", miner: addres
 
 /* ================= WEBSOCKET ================= */
 wss.on("connection", ws => {

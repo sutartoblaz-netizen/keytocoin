@@ -193,7 +193,7 @@ app.post("/mine", (req, res) => {
 
   broadcast({ type: "block", height: blockchain.length });
 
-  res.json({ message: "Block mined successfully" });
+  res.json({ message: "Block mined KTC" });
 });
 
 // ======================================================

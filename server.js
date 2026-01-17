@@ -1,6 +1,3 @@
-// ================================
-// KEYTOCOIN FINAL SERVER.JS
-// ================================
 const express = require("express");
 const bodyParser = require("body-parser");
 const http = require("http");
@@ -11,177 +8,158 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-app.use(bodyParser.json());
-
-// ================================
-// KONFIGURASI
-// ================================
+/* ================= CONFIG ================= */
 const PORT = 8883;
 const MAX_SUPPLY = 17_000_000;
 const BLOCK_REWARD = 17;
-const DIFFICULTY = 4;
+const POW_DIFFICULTY = 4;
+const MINE_COOLDOWN = 15_000; // ms
 
-// ================================
-// STATE BLOCKCHAIN
-// ================================
+/* ================= STATE ================= */
 let totalSupply = 0;
-let chain = [];
-let balances = {};
-let minedBlocks = {};
+const wallets = {};        // address -> { balance, blocks }
+const chain = [];          // block history
+const mempool = [];
+const lastMine = {};       // address -> timestamp
 
-if (!powHash.startsWith("0000")) error;
+/* ================= MIDDLEWARE ================= */
+app.use(bodyParser.json());
+app.use((_, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
 
-// ================================
-// UTIL HASH
-// ================================
+/* ================= UTILS ================= */
 function sha256(data) {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-const computed = sha256(address + "|" + nonce);
-if (computed !== powHash) error;
+function now() {
+  return Date.now();
+}
 
-// ================================
-// VERIFY SIGNATURE (ECDSA P-256)
-// ================================
+function broadcast(msg) {
+  const data = JSON.stringify(msg);
+  wss.clients.forEach(c => {
+    if (c.readyState === WebSocket.OPEN) c.send(data);
+  });
+}
+
+/* ================= BLOCK ================= */
+function createBlock({ miner, txs, nonce, powHash }) {
+  const prev = chain[chain.length - 1];
+  const block = {
+    index: chain.length,
+    time: now(),
+    miner,
+    txs,
+    nonce,
+    powHash,
+    prevHash: prev ? sha256(JSON.stringify(prev)) : "GENESIS"
+  };
+  block.hash = sha256(JSON.stringify(block));
+  return block;
+}
+
+/* ================= WALLET ================= */
+function getWallet(address) {
+  if (!wallets[address]) {
+    wallets[address] = { balance: 0, blocks: 0 };
+  }
+  return wallets[address];
+}
+
+/* ================= VERIFY ================= */
 function verifySignature(from, to, amount, signatureHex, pubKeyJwk) {
   try {
     const verify = crypto.createVerify("SHA256");
     verify.update(from + to + amount);
     verify.end();
 
-    const pubKey = crypto.createPublicKey({
+    const pub = crypto.createPublicKey({
       key: pubKeyJwk,
       format: "jwk"
     });
 
-    return verify.verify(
-      pubKey,
-      Buffer.from(signatureHex, "hex")
-    );
+    return verify.verify(pub, Buffer.from(signatureHex, "hex"));
   } catch {
     return false;
   }
 }
 
-// ================================
-// GENESIS BLOCK
-// ================================
-chain.push({
-  index: 0,
-  prevHash: "0",
-  timestamp: Date.now(),
-  nonce: 0,
-  hash: sha256("genesis"),
-  txs: []
-});
+/* ================= API ================= */
 
-// ================================
 // WALLET INFO
-// ================================
 app.get("/wallet/:address", (req, res) => {
-  const addr = req.params.address;
+  const w = getWallet(req.params.address);
   res.json({
-    balance: balances[addr] || 0,
-    blocks: minedBlocks[addr] || 0,
+    balance: w.balance,
+    blocks: w.blocks,
     supply: totalSupply
   });
 });
 
-// ================================
-// SEND TRANSACTION
-// ================================
+// SEND TX
 app.post("/send", (req, res) => {
   const { from, to, amount, signature, pubKey } = req.body;
+  if (!from || !to || !amount) return res.json({ error: "Invalid TX" });
 
-  if (!from || !to || !amount || !signature || !pubKey)
-    return res.json({ error: "Invalid transaction format" });
-
-  if ((balances[from] || 0) < amount)
+  const sender = getWallet(from);
+  if (sender.balance < amount)
     return res.json({ error: "Insufficient balance" });
 
-  if (
-    !verifySignature(from, to, amount, signature, pubKey)
-  )
+  if (!verifySignature(from, to, amount, signature, pubKey))
     return res.json({ error: "Invalid signature" });
 
-  // APPLY TRANSFER
-  balances[from] -= amount;
-  balances[to] = (balances[to] || 0) + amount;
+  sender.balance -= amount;
+  getWallet(to).balance += amount;
 
-  const tx = { from, to, amount, time: Date.now() };
-
-  // BROADCAST
-  broadcast({ type: "tx", ...tx });
+  mempool.push({ from, to, amount, time: now() });
+  broadcast({ type: "tx", to });
 
   res.json({ message: "Transaction confirmed" });
 });
 
-// ================================
-// MINING
-// ================================
+// MINE
 app.post("/mine", (req, res) => {
   const { address, nonce, powHash } = req.body;
+  if (!address) return res.json({ error: "No miner address" });
 
-  if (!address || nonce === undefined || !powHash)
-    return res.json({ error: "Invalid mining data" });
+  const last = lastMine[address] || 0;
+  if (now() - last < MINE_COOLDOWN)
+    return res.json({ error: "Mining cooldown" });
 
-  const data = address + "|";
-  if (!powHash.startsWith("0".repeat(DIFFICULTY)))
+  if (!powHash.startsWith("0".repeat(POW_DIFFICULTY)))
     return res.json({ error: "Invalid PoW" });
 
   if (totalSupply + BLOCK_REWARD > MAX_SUPPLY)
     return res.json({ error: "Max supply reached" });
 
-  // CREATE BLOCK
-  const prev = chain[chain.length - 1];
-  const block = {
-    index: chain.length,
-    prevHash: prev.hash,
-    timestamp: Date.now(),
+  const block = createBlock({
+    miner: address,
+    txs: mempool.splice(0),
     nonce,
-    hash: sha256(prev.hash + powHash),
-    miner: address
-  };
+    powHash
+  });
 
   chain.push(block);
-
-  // REWARD
-  balances[address] = (balances[address] || 0) + BLOCK_REWARD;
-  minedBlocks[address] = (minedBlocks[address] || 0) + 1;
   totalSupply += BLOCK_REWARD;
 
-  broadcast({
-    type: "mine",
-    miner: address,
-    reward: BLOCK_REWARD,
-    supply: totalSupply
-  });
+  const w = getWallet(address);
+  w.balance += BLOCK_REWARD;
+  w.blocks += 1;
+  lastMine[address] = now();
 
-  res.json({ message: "Block mined KTC" });
+  broadcast({ type: "block", miner: address });
+
+  res.json({ message: `Block #${block.index} mined (+${BLOCK_REWARD} KTC)` });
 });
 
-// ================================
-// WEBSOCKET
-// ================================
-function broadcast(msg) {
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) {
-      c.send(JSON.stringify(msg));
-    }
-  });
-}
-
+/* ================= WS ================= */
 wss.on("connection", ws => {
-  ws.send(JSON.stringify({
-    type: "info",
-    message: "Connected to KeytoCoin Network"
-  }));
+  ws.send(JSON.stringify({ type: "sync", supply: totalSupply }));
 });
 
-// ================================
-// START SERVER
-// ================================
+/* ================= START ================= */
 server.listen(PORT, () => {
-  console.log(`⛓️ KeytoCoin running on http://localhost:${PORT}`);
-});
+  console.log(`⛓️ KeytoCoin node running on http://localhost:${PORT}`);

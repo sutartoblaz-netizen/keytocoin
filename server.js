@@ -29,12 +29,17 @@ let chain = [];
 let balances = {};
 let minedBlocks = {};
 
+if (!powHash.startsWith("0000")) error;
+
 // ================================
 // UTIL HASH
 // ================================
 function sha256(data) {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
+
+const computed = sha256(address + "|" + nonce);
+if (computed !== powHash) error;
 
 // ================================
 // VERIFY SIGNATURE (ECDSA P-256)
